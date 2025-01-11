@@ -1,0 +1,3 @@
+'''
+Initial FastAPI setup
+'''
