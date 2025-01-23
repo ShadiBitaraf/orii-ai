@@ -1,7 +1,18 @@
+"""
+User Database Model -- Uses SQLAlchemy models for database structure (just stores the data. validation of email happens in schemas/user.py)
+Defines user table structure and fields:
+- Basic info (id, email)
+- Authentication (password hash)
+- OAuth data (Google tokens)
+- Account status
+- Timestamps
+"""
+
 from sqlalchemy import Boolean, Column, Integer, String, DateTime
 from sqlalchemy.sql import func
 from ..database import Base
 import uuid
+
 
 class User(Base):
     __tablename__ = "users"
