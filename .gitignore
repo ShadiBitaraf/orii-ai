@@ -39,4 +39,4 @@ htmlcov/
 .pytest_cache/
 
 # Logs
-*.log
+*.logbackend/test.db
