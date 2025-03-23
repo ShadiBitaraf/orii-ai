@@ -1,3 +1,8 @@
+"""
+ORII Calendar Assistant CLI
+Provides command-line interface for calendar management.
+"""
+
 import click
 import os
 import json
@@ -14,8 +19,20 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import redis
 from functools import lru_cache
-from prometheus_client import Counter, Histogram, start_http_server
 from posthog import Posthog
+from app.monitoring import (
+    start_metrics_server,
+    record_llm_request,
+    record_calendar_request,
+    record_cache_operation,
+    record_user_session,
+    record_user_query,
+    HeliconeTracker,
+    PosthogTracker,
+    cache_manager,
+)
+from google.auth.transport.requests import Request
+import re
 
 load_dotenv()
 
@@ -46,31 +63,6 @@ LLM_CACHE_SIZE = 100  # Number of LLM responses to cache in memory
 # Prometheus metrics
 PROM_PORT = int(os.getenv("PROMETHEUS_PORT", "9090"))
 
-# API metrics
-llm_requests_total = Counter(
-    "orii_llm_requests_total", "Total number of LLM API requests", ["status", "model"]
-)
-
-llm_request_duration = Histogram(
-    "orii_llm_request_duration_seconds", "Time spent processing LLM requests", ["model"]
-)
-
-calendar_requests_total = Counter(
-    "orii_calendar_requests_total",
-    "Total number of Google Calendar API requests",
-    ["operation", "status"],
-)
-
-calendar_request_duration = Histogram(
-    "orii_calendar_request_duration_seconds",
-    "Time spent processing Calendar API requests",
-    ["operation"],
-)
-
-cache_hits = Counter(
-    "orii_cache_hits_total", "Total number of cache hits", ["cache_type"]
-)
-
 # Initialize PostHog
 posthog = Posthog(
     project_api_key=os.getenv("POSTHOG_API_KEY"),
@@ -79,13 +71,15 @@ posthog = Posthog(
 
 # Start Prometheus metrics server if not in CLI mode
 if not os.getenv("CLI_MODE"):
-    start_http_server(PROM_PORT)
+    start_metrics_server()
     print(f"Prometheus metrics available on port {PROM_PORT}")
 
 
-def generate_cache_key(events_text, query):
+def generate_cache_key(content):
     """Generate a unique cache key for LLM queries"""
-    content = f"{events_text}:{query}".encode("utf-8")
+    if isinstance(content, (list, dict)):
+        content = json.dumps(content, sort_keys=True)
+    content = content.encode("utf-8")
     return f"llm:response:{hashlib.sha256(content).hexdigest()}"
 
 
@@ -95,76 +89,64 @@ def get_cached_llm_response(cache_key):
     return redis_client.get(cache_key)
 
 
-def query_gpt(events_text, query, use_cache=True):
-    """Enhanced GPT query function with caching and monitoring"""
+def query_gpt(service, query, conversation_history=None, include_all_calendars=True):
+    """Query GPT with calendar context"""
     start_time = time.time()
-
     try:
-        # Skip Redis if not available
-        if use_cache and redis_client:
-            try:
-                # Generate cache key
-                cache_key = generate_cache_key(events_text, query)
+        # Get calendar events
+        events = get_events(service, include_all_calendars)
+        events_text = "\n".join(format_event_text(event) for event in events)
 
-                # Check memory cache first (fastest)
-                cached_response = get_cached_llm_response(cache_key)
-                if cached_response:
-                    cache_hits.labels(cache_type="memory").inc()
-                    return json.loads(cached_response)
+        # Build system prompt
+        system_prompt = """You are a helpful calendar assistant with access to all visible calendars. You can help with:
+1. Viewing events: You can see all events in the visible calendars for the next 7 days.
+2. Creating events: You can suggest creating new events at specific times.
+3. Modifying events: You can suggest changes to existing events.
+4. Deleting events: You can suggest deleting events that are no longer needed.
 
-                # Check Redis cache
-                redis_cached = redis_client.get(cache_key)
-                if redis_cached:
-                    cache_hits.labels(cache_type="redis").inc()
-                    return json.loads(redis_cached)
-            except redis.ConnectionError:
-                print("Warning: Redis not available, proceeding without caching")
-                use_cache = False
+When handling dates and times:
+- Always consider the current time context when interpreting relative dates (e.g., "tomorrow", "next week").
+- Be specific about dates and times in your responses.
+- Format times in a clear, readable way (e.g., "2:30 PM" instead of "14:30").
+- When suggesting event times, be mindful of working hours and existing commitments.
 
-        # Make API call
+Maintain conversation context and relate short user responses to previous questions."""
+
+        # Build messages array
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "system",
+                "content": f"Current events in the next 7 days:\n{events_text}",
+            },
+        ]
+
+        # Add conversation history if provided
+        if conversation_history:
+            messages.extend(conversation_history)
+
+        # Add user query
+        messages.append({"role": "user", "content": query})
+
+        # Call OpenAI API with monitoring
         response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {
-                    "role": "system",
-                    "content": """You are ORII, a calendar assistant. You can help users manage their calendar by:
-                    - Viewing upcoming events
-                    - Creating new events
-                    - Modifying existing events
-                    - Deleting events
-                    Be concise and helpful. When users want to make changes, confirm the action first.""",
-                },
-                {
-                    "role": "user",
-                    "content": f"Calendar events:\n{events_text}\n\nUser question: {query}",
-                },
-            ],
+            model="gpt-4-turbo-preview",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1000,
         )
 
         # Record successful request
-        llm_requests_total.labels(status="success", model="gpt-4").inc()
+        record_llm_request("gpt-4", "success", time.time() - start_time)
 
-        # Cache the response if Redis is available
-        response_content = response.choices[0].message.content
-        if use_cache and redis_client:
-            try:
-                cache_data = json.dumps(response_content)
-                redis_client.setex(cache_key, CACHE_TTL, cache_data)
-                get_cached_llm_response.cache_clear()  # Clear memory cache to prevent stale data
-            except redis.ConnectionError:
-                print("Warning: Could not cache response in Redis")
-
-        return response_content
+        # Extract and return assistant's response
+        return response.choices[0].message.content
 
     except Exception as e:
         # Record failed request
-        llm_requests_total.labels(status="error", model="gpt-4").inc()
-        print(f"Error in LLM query: {str(e)}")
+        record_llm_request("gpt-4", "error", time.time() - start_time)
+        print(f"Error querying GPT: {str(e)}")
         raise
-    finally:
-        # Record request duration
-        duration = time.time() - start_time
-        llm_request_duration.labels(model="gpt-4").observe(duration)
 
 
 style = Style.from_dict(
@@ -176,46 +158,75 @@ style = Style.from_dict(
 
 
 def get_calendar_service():
-    """Get an authorized Google Calendar service instance"""
+    """Get an authorized Google Calendar service instance with credential persistence"""
     try:
         # Verify environment variables
         client_id = os.getenv("GOOGLE_CLIENT_ID")
         client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
+        token_file = os.path.expanduser("~/.orii/token.json")
 
         if not client_id or not client_secret:
             raise ValueError(
                 "Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET in environment variables"
             )
 
-        # Create credentials configuration from environment variables
-        client_config = {
-            "installed": {
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "redirect_uris": ["http://localhost"],
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-            }
-        }
+        creds = None
 
-        # Initialize the OAuth2 flow
-        flow = InstalledAppFlow.from_client_config(
-            client_config, SCOPES, redirect_uri="http://localhost"
-        )
+        # Create .orii directory if it doesn't exist
+        os.makedirs(os.path.dirname(token_file), exist_ok=True)
 
-        # Run the OAuth2 flow
-        creds = flow.run_local_server(
-            port=0, access_type="offline", include_granted_scopes="true"
-        )
+        # Load existing credentials if available
+        if os.path.exists(token_file):
+            try:
+                with open(token_file, "r") as token:
+                    token_data = json.load(token)
+                    creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+            except Exception as e:
+                print(f"Error loading saved credentials: {str(e)}")
+                # If there's an error loading credentials, we'll create new ones
+
+        # If credentials don't exist or are invalid
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                try:
+                    creds.refresh(Request())
+                except Exception as e:
+                    print(f"Error refreshing credentials: {str(e)}")
+                    creds = None
+
+            if not creds:
+                # Create credentials configuration
+                client_config = {
+                    "installed": {
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "redirect_uris": ["http://localhost"],
+                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                    }
+                }
+
+                # Initialize the OAuth2 flow
+                flow = InstalledAppFlow.from_client_config(
+                    client_config, SCOPES, redirect_uri="http://localhost"
+                )
+
+                # Run the OAuth2 flow
+                creds = flow.run_local_server(
+                    port=0, access_type="offline", include_granted_scopes="true"
+                )
+
+            # Save the credentials
+            try:
+                with open(token_file, "w") as token:
+                    token.write(creds.to_json())
+                print("Credentials saved successfully")
+            except Exception as e:
+                print(f"Warning: Could not save credentials: {str(e)}")
 
         # Build and return the service
         service = build("calendar", "v3", credentials=creds)
-
-        # Verify credentials are valid
-        if not creds or not creds.valid:
-            raise ValueError("Invalid or missing credentials")
-
         return service
 
     except Exception as e:
@@ -229,68 +240,240 @@ def get_calendar_service():
         raise
 
 
-def get_events(service):
+def get_events(service, include_all_calendars=True, days_range=7):
     """Get calendar events with monitoring"""
     start_time = time.time()
     try:
         now = datetime.now(timezone.utc)
         now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        end_str = (now + timedelta(days=days_range)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        events_result = (
+        all_events = []
+
+        if include_all_calendars:
+            # Get list of all calendars
+            calendar_list = service.calendarList().list().execute()
+            # Strictly filter to only include calendars where selected=True
+            calendars = [
+                cal
+                for cal in calendar_list.get("items", [])
+                if cal.get("selected") is True  # Must be explicitly True
+            ]
+
+            if not calendars:
+                print(
+                    "Warning: No visible calendars found. Defaulting to primary calendar."
+                )
+                calendars = [{"id": "primary"}]
+        else:
+            # Only use primary calendar
+            calendars = [{"id": "primary"}]
+
+        # Fetch events from each calendar
+        for calendar in calendars:
+            try:
+    events_result = (
+        service.events()
+        .list(
+                        calendarId=calendar["id"],
+                        timeMin=now_str,
+                        timeMax=end_str,
+                        maxResults=100,  # Increased from 10
+            singleEvents=True,
+            orderBy="startTime",
+        )
+        .execute()
+    )
+
+                events = events_result.get("items", [])
+
+                # Add calendar info to each event
+                for event in events:
+                    # Parse start and end times
+                    start_time = None
+                    end_time = None
+
+                    start = event.get("start", {})
+                    end = event.get("end", {})
+
+                    try:
+                        if "dateTime" in start:
+                            start_time = datetime.fromisoformat(
+                                start["dateTime"].replace("Z", "+00:00")
+                            )
+                        elif "date" in start:
+                            start_time = datetime.strptime(
+                                start["date"], "%Y-%m-%d"
+                            ).replace(tzinfo=timezone.utc)
+
+                        if "dateTime" in end:
+                            end_time = datetime.fromisoformat(
+                                end["dateTime"].replace("Z", "+00:00")
+                            )
+                        elif "date" in end:
+                            # For all-day events, end date is exclusive, so subtract 1 second
+                            end_time = (
+                                datetime.strptime(end["date"], "%Y-%m-%d").replace(
+                                    tzinfo=timezone.utc
+                                )
+                                + timedelta(days=1)
+                                - timedelta(seconds=1)
+                            )
+
+                        if start_time and end_time:
+                            # Convert to local timezone for consistent comparison
+                            local_start = start_time.astimezone()
+                            local_end = end_time.astimezone()
+
+                            # Calculate duration in hours
+                            duration = (
+                                local_end - local_start
+                            ).total_seconds() / 3600.0
+
+                            event.update(
+                                {
+                                    "parsed_start": local_start,
+                                    "parsed_end": local_end,
+                                    "duration": duration,
+                                    "calendarId": calendar.get("id"),
+                                    "calendarName": calendar.get(
+                                        "summary", "Primary Calendar"
+                                    ),
+                                }
+                            )
+
+                            # Add calendar color if available
+                            if "backgroundColor" in calendar:
+                                event["calendarColor"] = calendar["backgroundColor"]
+                            all_events.append(event)
+
+                    except (ValueError, TypeError) as e:
+                        print(f"Error parsing event times: {str(e)}")
+                        continue
+
+            except Exception as cal_error:
+                print(
+                    f"Error fetching events from calendar {calendar.get('summary', calendar['id'])}: {str(cal_error)}"
+                )
+                continue
+
+        # Sort events by start time
+        all_events.sort(key=lambda x: x["parsed_start"])
+
+        record_calendar_request("list", "success", time.time() - start_time)
+        return all_events
+    except Exception as e:
+        record_calendar_request("list", "error", time.time() - start_time)
+        print(f"Error fetching events: {str(e)}")
+        print(f"Request parameters: timeMin={now_str}, timeMax={end_str}")
+        raise
+
+
+def create_event(service, event_details):
+    """Create calendar event with comprehensive details"""
+    start_time_perf = time.time()
+    try:
+        event = {
+            "summary": event_details.get("summary"),
+            "description": event_details.get("description", ""),
+            "location": event_details.get("location", ""),
+            "colorId": event_details.get("color_id", ""),  # Google Calendar color ID
+        }
+
+        # Handle start and end times
+        if event_details.get("all_day", False):
+            # All-day event
+            start_date = event_details["start_date"]
+            end_date = event_details.get("end_date", start_date)
+            event["start"] = {
+                "date": start_date,
+                "timeZone": event_details.get("timezone", "UTC"),
+            }
+            event["end"] = {
+                "date": end_date,
+                "timeZone": event_details.get("timezone", "UTC"),
+            }
+        else:
+            # Timed event
+            start = event_details["start_time"]
+            end = event_details["end_time"]
+
+            # Ensure timezone is set
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            if end.tzinfo is None:
+                end = end.replace(tzinfo=timezone.utc)
+
+            event["start"] = {
+                "dateTime": start.isoformat(),
+                "timeZone": event_details.get("timezone", "UTC"),
+            }
+            event["end"] = {
+                "dateTime": end.isoformat(),
+                "timeZone": event_details.get("timezone", "UTC"),
+            }
+
+        # Handle recurrence
+        if event_details.get("recurrence"):
+            event["recurrence"] = [event_details["recurrence"]]  # RRULE string
+
+        # Handle attendees
+        if event_details.get("attendees"):
+            event["attendees"] = [
+                {"email": email} for email in event_details["attendees"]
+            ]
+
+        # Handle conference data (Google Meet)
+        if event_details.get("add_meet", False):
+            event["conferenceData"] = {
+                "createRequest": {
+                    "requestId": f"meet_{int(time.time())}",
+                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
+                }
+            }
+        elif event_details.get("meeting_link"):
+            event["conferenceData"] = {
+                "entryPoints": [
+                    {
+                        "entryPointType": "video",
+                        "uri": event_details["meeting_link"],
+                        "label": "Meeting Link",
+                    }
+                ]
+            }
+
+        # Handle attachments
+        if event_details.get("attachments"):
+            event["attachments"] = event_details["attachments"]
+
+        # Handle reminders
+        if event_details.get("reminders"):
+            event["reminders"] = event_details["reminders"]
+
+        # Handle visibility
+        if event_details.get("visibility"):
+            event["visibility"] = event_details["visibility"]
+
+        # Create the event
+        result = (
             service.events()
-            .list(
+            .insert(
                 calendarId="primary",
-                timeMin=now_str,
-                maxResults=10,
-                singleEvents=True,
-                orderBy="startTime",
+                body=event,
+                conferenceDataVersion=1 if event_details.get("add_meet") else 0,
+                sendUpdates=event_details.get("send_updates", "none"),
             )
             .execute()
         )
 
-        calendar_requests_total.labels(operation="list", status="success").inc()
-        return events_result.get("items", [])
-    except Exception as e:
-        calendar_requests_total.labels(operation="list", status="error").inc()
-        print(f"Error fetching events: {str(e)}")
-        print(f"Request parameters: timeMin={now_str}")
-        raise
-    finally:
-        duration = time.time() - start_time
-        calendar_request_duration.labels(operation="list").observe(duration)
-
-
-def create_event(service, summary, start_time, end_time, description=None):
-    """Create calendar event with monitoring"""
-    start_time_perf = time.time()
-    try:
-        if start_time.tzinfo is None:
-            start_time = start_time.replace(tzinfo=timezone.utc)
-        if end_time.tzinfo is None:
-            end_time = end_time.replace(tzinfo=timezone.utc)
-
-        if end_time <= start_time:
-            raise ValueError("End time must be after start time")
-
-        event = {
-            "summary": summary,
-            "start": {"dateTime": start_time.isoformat(), "timeZone": "UTC"},
-            "end": {"dateTime": end_time.isoformat(), "timeZone": "UTC"},
-        }
-        if description:
-            event["description"] = description
-
-        result = service.events().insert(calendarId="primary", body=event).execute()
-        calendar_requests_total.labels(operation="create", status="success").inc()
+        record_calendar_request("create", "success", time.time() - start_time_perf)
         return result
+
     except Exception as e:
-        calendar_requests_total.labels(operation="create", status="error").inc()
+        record_calendar_request("create", "error", time.time() - start_time_perf)
         print(f"Error creating event: {str(e)}")
         print(f"Event details: {event}")
         raise
-    finally:
-        duration = time.time() - start_time_perf
-        calendar_request_duration.labels(operation="create").observe(duration)
 
 
 def update_event(service, event_id, updates):
@@ -342,6 +525,75 @@ def get_user_identifier(service):
         return "anonymous_user"
 
 
+def format_event_text(event):
+    """Format a single event for display"""
+    try:
+        summary = event.get("summary", "Untitled Event")
+        calendar_name = event.get("calendarName", "Primary Calendar")
+        calendar_color = event.get("calendarColor", "")
+
+        # Use parsed times for consistent formatting
+        start_time = event.get("parsed_start")
+        end_time = event.get("parsed_end")
+
+        if start_time and end_time:
+            # Check if it's an all-day event
+            is_all_day = (
+                start_time.hour == 0
+                and start_time.minute == 0
+                and end_time.hour == 23
+                and end_time.minute == 59
+                and end_time.second == 59
+            )
+
+            if is_all_day:
+                start_str = start_time.strftime("%Y-%m-%d")
+                time_str = f"{start_str} (All day)"
+            else:
+                # Format times in local timezone
+                local_start = start_time.astimezone()
+                local_end = end_time.astimezone()
+
+                # If same day, only show time for end
+                if local_start.date() == local_end.date():
+                    time_str = f"{local_start.strftime('%Y-%m-%d %I:%M %p')} - {local_end.strftime('%I:%M %p')}"
+                else:
+                    time_str = f"{local_start.strftime('%Y-%m-%d %I:%M %p')} - {local_end.strftime('%Y-%m-%d %I:%M %p')}"
+
+            # Add duration
+            duration = event.get("duration", 0)
+            if duration > 0:
+                time_str += f" ({duration:.1f} hours)"
+        else:
+            # Fallback to raw data if parsing failed
+            start = event.get("start", {})
+            if "dateTime" in start:
+                time_str = start["dateTime"]
+            elif "date" in start:
+                time_str = f"{start['date']} (All day)"
+            else:
+                time_str = "No time specified"
+
+        # Add additional details if available
+        details = []
+        if event.get("location"):
+            details.append(f"Location: {event['location']}")
+        if event.get("hangoutLink"):
+            details.append(f"Meet: {event['hangoutLink']}")
+        if calendar_color:
+            details.append(f"Color: {calendar_color}")
+
+        # Combine all information
+        event_text = f"{summary} at {time_str} ({calendar_name})"
+        if details:
+            event_text += f" - {', '.join(details)}"
+
+        return event_text
+    except Exception as e:
+        print(f"Error formatting event: {str(e)}")
+        return str(event)  # Fallback to string representation
+
+
 def chat_mode():
     session = PromptSession(style=style)
     service = get_calendar_service()
@@ -349,15 +601,17 @@ def chat_mode():
     # Get user identifier safely
     user_id = get_user_identifier(service)
     session_id = str(uuid.uuid4())
+    conversation_history = []
 
     print("\n🗓️  ORII Calendar Assistant\n")
 
     # Track session start
     track_user_action(
-        user_id=user_id,  # Using safe user identifier
+        user_id=user_id,
         event_name="session_started",
         properties={"session_id": session_id, "mode": "chat"},
     )
+    session_start_time = time.time()
 
     while True:
         try:
@@ -388,55 +642,53 @@ def chat_mode():
                 },
             )
 
-            events = get_events(service)
-            events_text = "\n".join(
-                [
-                    f"{event['summary']} on {event['start'].get('dateTime', event['start'].get('date'))}"
-                    for event in events
-                ]
+            # Get events from all calendars
+            events = get_events(service, include_all_calendars=True)
+
+            # Format events text with error handling
+            events_text = (
+                "\n".join([format_event_text(event) for event in events])
+                if events
+                else "No upcoming events found"
             )
 
             start_time = time.time()
-            response = query_gpt(events_text, user_input)
+            response = query_gpt(service, user_input, conversation_history)
             response_time = time.time() - start_time
 
-            # Track response metrics
+            # Add to conversation history
+            conversation_history.extend(
+                [
+                    {"role": "user", "content": user_input},
+                    {"role": "assistant", "content": response},
+                ]
+            )
+
+            # Keep conversation history at a reasonable size
+            if len(conversation_history) > 10:  # Keep last 5 exchanges
+                conversation_history = conversation_history[-10:]
+
+            # Track response
             track_user_action(
                 user_id=user_id,
-                event_name="assistant_response",
+                event_name="bot_response",
                 properties={
                     "session_id": session_id,
                     "response_time": response_time,
                     "response_length": len(response),
-                    "mode": "chat",
                 },
             )
 
-            print(f"\nORII: {response}\n")
+            click.echo(f"\nORII: {response}\n")
 
         except KeyboardInterrupt:
             continue
         except EOFError:
-            # Track session interruption
-            track_user_action(
-                user_id=user_id,
-                event_name="session_interrupted",
-                properties={"session_id": session_id, "mode": "chat"},
-            )
             break
         except Exception as e:
-            # Track errors
-            track_user_action(
-                user_id=user_id,
-                event_name="error",
-                properties={
-                    "session_id": session_id,
-                    "error_type": type(e).__name__,
-                    "error_message": str(e),
-                    "mode": "chat",
-                },
-            )
-            raise
+            print(f"Error: {str(e)}")
+            if hasattr(e, "content"):
+                print(f"Detailed error: {e.content}")
 
 
 @click.group()
@@ -461,14 +713,14 @@ def ask(query):
         )
 
         start_time = time.time()
-        events = get_events(service)
-        events_text = "\n".join(
-            [
-                f"{event['summary']} on {event['start'].get('dateTime', event['start'].get('date'))}"
-                for event in events
-            ]
+        events = get_events(service, include_all_calendars=True)
+        events_text = (
+            "\n".join([format_event_text(event) for event in events])
+            if events
+            else "No upcoming events found"
         )
-        response = query_gpt(events_text, query)
+
+        response = query_gpt(service, query)
         response_time = time.time() - start_time
 
         # Track response
@@ -508,21 +760,29 @@ def test_create():
     """Test creating a calendar event"""
     try:
         service = get_calendar_service()
-        # Create a test event starting now and ending 1 hour later
+        # Create a test event starting now and ending 2 hours later
         start = datetime.now(timezone.utc)
-        end = datetime.now(timezone.utc) + timedelta(hours=1)  # Add 1 hour duration
+        end = start + timedelta(hours=2)
 
-        # Format the event properly
-        event = create_event(
-            service,
-            "Test Event from ORII CLI",
-            start,
-            end,
-            "This is a test event created by ORII CLI",
-        )
+        # Create event details dictionary
+        event_details = {
+            "summary": "Test Event from ORII CLI",
+            "description": "This is a test event created by ORII CLI",
+            "start_time": start,
+            "end_time": end,
+            "timezone": "UTC",
+            "add_meet": True,  # Add a Google Meet link
+            "reminders": {"useDefault": True},
+        }
+
+        # Create the event
+        event = create_event(service, event_details)
+
         click.echo(f"Created test event: {event['id']}")
         click.echo(f"Start: {start.isoformat()}")
         click.echo(f"End: {end.isoformat()}")
+        if event.get("hangoutLink"):
+            click.echo(f"Meet link: {event['hangoutLink']}")
     except Exception as e:
         click.echo(f"Error: {str(e)}")
         if hasattr(e, "content"):
@@ -543,20 +803,47 @@ def test_delete(event_id):
 
 @cli.command()
 def test_llm():
-    """Test LLM responses without calendar operations"""
-    test_events = """Meeting with Team at 2024-03-23T15:00:00Z
-Product Review at 2024-03-24T10:00:00Z
-Client Call at 2024-03-25T14:30:00Z"""
+    """Test LLM responses with real calendar data"""
+    try:
+        service = get_calendar_service()
+        conversation_history = []
 
-    while True:
-        try:
-            query = click.prompt("Test query")
-            if query.lower() in ["exit", "quit", "bye"]:
+        while True:
+            try:
+                query = click.prompt("Test query")
+                if query.lower() in ["exit", "quit", "bye"]:
+                    break
+
+                # Add date context to query
+                current_time = datetime.now().astimezone()
+                date_context = (
+                    f"Current time: {current_time.strftime('%Y-%m-%d %H:%M:%S %Z')}"
+                )
+                full_query = f"{date_context}\n{query}"
+
+                response = query_gpt(service, full_query, conversation_history)
+                conversation_history.extend(
+                    [
+                        {"role": "user", "content": query},
+                        {"role": "assistant", "content": response},
+                    ]
+                )
+
+                # Keep conversation history manageable
+                if len(conversation_history) > 10:
+                    conversation_history = conversation_history[-10:]
+
+                click.echo(f"\nORII: {response}\n")
+            except (KeyboardInterrupt, EOFError):
                 break
-            response = query_gpt(test_events, query)
-            click.echo(f"\nORII: {response}\n")
-        except (KeyboardInterrupt, EOFError):
-            break
+            except Exception as e:
+                print(f"Error: {str(e)}")
+                if hasattr(e, "content"):
+                    print(f"Detailed error: {e.content}")
+    except Exception as e:
+        click.echo(f"Error: {str(e)}")
+        if hasattr(e, "content"):
+            click.echo(f"Detailed error: {e.content}")
 
 
 # Development mode configuration
