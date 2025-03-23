@@ -9,20 +9,25 @@ Defines user table structure and fields:
 """
 
 from sqlalchemy import Boolean, Column, Integer, String, DateTime
-from sqlalchemy.sql import func
-from ..database import Base
-import uuid
+from sqlalchemy.orm import relationship
+from app.database import Base
+from datetime import datetime, timezone
 
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = {"extend_existing": True}
 
-    id = Column(Integer, primary_key=True, index=True)
-    uuid = Column(String, unique=True, index=True, default=lambda: str(uuid.uuid4()))
-    email = Column(String, unique=True, index=True)
+    id = Column(Integer, primary_key=True)
+    email = Column(String, unique=True)
     hashed_password = Column(String)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    google_token = Column(String, nullable=True)
-    google_refresh_token = Column(String, nullable=True)
-    token_expiry = Column(DateTime, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.now(timezone.utc))
+
+    # Add relationships
+    oauth_credentials = relationship(
+        "OAuthCredentials", back_populates="user", cascade="all, delete-orphan"
+    )
+    oauth_states = relationship(
+        "OAuthState", back_populates="user", cascade="all, delete-orphan"
+    )
