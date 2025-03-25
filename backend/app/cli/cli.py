@@ -10,6 +10,7 @@ import hashlib
 import time
 import uuid
 from datetime import datetime, timezone, timedelta
+from termcolor import colored
 from prompt_toolkit import PromptSession
 from prompt_toolkit.styles import Style
 from google.oauth2.credentials import Credentials
@@ -36,6 +37,14 @@ import re
 import pytz
 from dateutil import parser as date_parser
 from dateutil.relativedelta import relativedelta
+import sys
+import pickle
+import traceback
+import tempfile
+import urllib.parse
+import requests
+from pathlib import Path
+from typing import Dict, List, Optional, Any, Callable, Union
 
 load_dotenv()
 
@@ -106,205 +115,274 @@ def get_cached_llm_response(cache_key):
 
 
 def parse_time_range(query):
-    """Use NLP techniques to parse time range from a user query.
+    """Parse time range from query text
 
-    This function analyzes a user query to determine:
-    1. Whether they're searching in the past or future
-    2. The appropriate range of days to look across
-    3. Whether the query is asking for the "most recent" or "last" occurrence
+    Args:
+        query: Natural language query string
 
     Returns:
-        is_past (bool): Whether to search in the past
-        days_range (int): Number of days to search
-        reverse_chrono (bool): Whether to use reverse chronological ordering
+        Dict with parsed time range info
     """
     # Default values
     is_past = False
-    days_range = 7
-    reverse_chrono = False
+    days_range = 7  # Default to a week
+    reverse_chronological = False
+    specific_date = None
 
-    # Lowercase the query for consistent parsing
     query_lower = query.lower()
+    print(f"[DEBUG] TIME PARSING - Analyzing query for time range: '{query_lower}'")
 
-    # Check if this is a "last/recent" type query - these are treated specially
-    last_recent_patterns = [
-        r"(?:when|what|where)(?:\s+\w+){0,4}\s+(?:was|is|did|had)(?:\s+\w+){0,3}\s+(?:last|most\s+recent|latest)",
-        r"last\s+time\s+(?:i|we)",
-        r"(?:my|our)\s+last\s+(?:\w+)",
-        r"(?:last|latest|recent|previous|prior)",
+    # Try to extract a specific date first (this takes precedence)
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Various date formats to check
+    date_patterns = [
+        # May 18
+        r"(?:on|for|at|next|this|coming|past|previous|last)\s+([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?",
+        # 18th of May
+        r"(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?([a-z]+)(?:\s*,?\s*(\d{4}))?",
+        # MM/DD or MM/DD/YYYY
+        r"(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?",
+        # YYYY-MM-DD format
+        r"(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})",
     ]
 
-    # Check if any last/recent pattern matches
-    is_last_recent_query = any(
-        re.search(pattern, query_lower) for pattern in last_recent_patterns
-    )
+    year = today.year
+    for pattern in date_patterns:
+        matches = re.findall(pattern, query_lower)
+        if matches:
+            print(f"[DEBUG] TIME PARSING - Found date pattern matches: {matches}")
 
-    if is_last_recent_query:
-        is_past = True
-        reverse_chrono = True
-
-        # For "last X" queries, we need to determine the appropriate time window
-        # based on the event frequency - look for specific event types
-        event_frequencies = {
-            # Daily events - need shorter lookback
-            "daily": ["meeting", "standup", "check-in", "call", "chat"],
-            # Weekly events - medium lookback
-            "weekly": ["session", "class", "workshop", "lesson", "sync", "1:1"],
-            # Monthly events - longer lookback
-            "monthly": [
-                "appointment",
-                "visit",
-                "checkup",
-                "review",
-                "planning",
-                "exam",
-            ],
-            # Infrequent events - very long lookback
-            "infrequent": [
-                "doctor",
-                "therapy",
-                "dentist",
-                "medical",
-                "consultation",
-                "interview",
-                "trip",
-            ],
-        }
-
-        # Determine appropriate lookback period based on event type mentioned
-        if any(term in query_lower for term in event_frequencies["daily"]):
-            days_range = 14  # Two weeks for daily events
-        elif any(term in query_lower for term in event_frequencies["weekly"]):
-            days_range = 60  # ~2 months for weekly events
-        elif any(term in query_lower for term in event_frequencies["monthly"]):
-            days_range = 180  # ~6 months for monthly events
-        elif any(term in query_lower for term in event_frequencies["infrequent"]):
-            days_range = 365  # Full year for infrequent events
-        else:
-            # Default for last/recent queries without specific event types
-            days_range = 90  # Look back 3 months by default
-
-    # If not a last/recent query, process normally
-    else:
-        # Check for explicit time indicators
-        past_indicators = [
-            "previous",
-            "ago",
-            "before",
-            "earlier",
-            "past",
-            "prior",
-            "yesterday",
-            "last",
-        ]
-        future_indicators = [
-            "future",
-            "upcoming",
-            "next",
-            "later",
-            "soon",
-            "tomorrow",
-            "following",
-        ]
-
-        # Past vs future determination
-        past_count = sum(1 for term in past_indicators if term in query_lower)
-        future_count = sum(1 for term in future_indicators if term in query_lower)
-
-        # Determine direction based on indicator counts
-        if past_count > future_count:
-            is_past = True
-        elif future_count > past_count:
-            is_past = False
-        # If tied, do more specific checks
-        else:
-            # Check specific date patterns
-            date_match = re.search(r"(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?", query)
-            if date_match:
-                # Handle specific date mentioned in the query
-                month, day, year = date_match.groups()
-                if year is None:
-                    year = datetime.now().year
-                else:
-                    year = int(year)
-                    if year < 100:  # Handle 2-digit years
-                        year += 2000
-
-                # Parse the date into a datetime object
+            for match in matches:
                 try:
-                    target_date = datetime(year, int(month), int(day))
-                    current_date = datetime.now()
+                    # Handle different pattern formats
+                    if len(match) == 3:  # Full patterns with possible year
+                        if pattern == date_patterns[0]:  # Month name, day, [year]
+                            month_str = match[0]
+                            day = int(match[1])
+                            year_str = match[2]
+                        elif pattern == date_patterns[1]:  # Day, month name, [year]
+                            day = int(match[0])
+                            month_str = match[1]
+                            year_str = match[2]
+                        elif pattern == date_patterns[2]:  # MM/DD/[YY]
+                            # For MM/DD format
+                            month = int(match[0])
+                            day = int(match[1])
+                            year_str = match[2]
+                            month_str = None
+                        else:  # YYYY-MM-DD
+                            year = int(match[0])
+                            month = int(match[1])
+                            day = int(match[2])
+                            month_str = None
 
-                    # Determine if the date is in the past or future
-                    is_past = target_date < current_date
+                        # Parse year if provided
+                        if year_str and year_str.strip():
+                            year = int(year_str)
+                            # Handle 2-digit years
+                            if year < 100:
+                                year += 2000
 
-                    # Calculate days difference
-                    days_range = (
-                        abs((target_date - current_date).days) + 1
-                    )  # Add 1 day buffer
-                except (ValueError, TypeError):
-                    # If date parsing fails, use defaults
-                    pass
+                    # Handle month names
+                    if "month_str" in locals() and month_str:
+                        month_mappings = {
+                            "jan": 1,
+                            "january": 1,
+                            "feb": 2,
+                            "february": 2,
+                            "mar": 3,
+                            "march": 3,
+                            "apr": 4,
+                            "april": 4,
+                            "may": 5,
+                            "jun": 6,
+                            "june": 6,
+                            "jul": 7,
+                            "july": 7,
+                            "aug": 8,
+                            "august": 8,
+                            "sep": 9,
+                            "september": 9,
+                            "sept": 9,
+                            "oct": 10,
+                            "october": 10,
+                            "nov": 11,
+                            "november": 11,
+                            "dec": 12,
+                            "december": 12,
+                        }
 
-            # If still not determined, check for common temporal phrases
+                        # Try to match the month name
+                        matched_month = None
+                        for month_name, month_num in month_mappings.items():
+                            if month_str.startswith(month_name):
+                                matched_month = month_num
+                                break
+
+                        if matched_month:
+                            month = matched_month
+                        else:
+                            print(
+                                f"[DEBUG] TIME PARSING - Could not parse month name: {month_str}"
+                            )
+                            continue
+
+                    # Create the date object
+                    try:
+                        parsed_date = datetime(year, month, day)
+                        if parsed_date:
+                            specific_date = parsed_date
+                            print(
+                                f"[DEBUG] TIME PARSING - Found specific date: {specific_date}"
+                            )
+
+                            # Check if the date is in the past or future
+                            is_past = specific_date < today
+
+                            # For specific dates, we only look at events for that day
+                            days_range = 1
+                            break
+                    except ValueError as e:
+                        print(f"[DEBUG] TIME PARSING - Invalid date values: {e}")
+                except Exception as e:
+                    print(f"[DEBUG] TIME PARSING - Error parsing date: {e}")
+
+    # If we found a specific date, no need to process other time indicators
+    if not specific_date:
+        # Other time parsing logic as before
+        # Count indicators of past vs future tense
+        past_indicators = len(
+            [
+                word
+                for word in [
+                    "last",
+                    "previous",
+                    "past",
+                    "recent",
+                    "ago",
+                    "yesterday",
+                    "earlier",
+                    "before",
+                    "had",
+                    "was",
+                    "were",
+                ]
+                if word in query_lower
+            ]
+        )
+
+        future_indicators = len(
+            [
+                word
+                for word in [
+                    "next",
+                    "upcoming",
+                    "future",
+                    "coming",
+                    "soon",
+                    "tomorrow",
+                    "later",
+                    "after",
+                    "will",
+                    "plan",
+                    "schedule",
+                ]
+                if word in query_lower
+            ]
+        )
+
+        print(
+            f"[DEBUG] TIME PARSING - Past indicators: {past_indicators}, Future indicators: {future_indicators}"
+        )
+
+        # Determine if past or future based on query indicators
+        if past_indicators > future_indicators:
+            is_past = True
+
+        # Extract days range for the search
+        day_match = re.search(r"(\d+)\s+days?", query_lower)
+        week_match = re.search(r"(\d+)\s+weeks?", query_lower)
+        month_match = re.search(r"(\d+)\s+months?", query_lower)
+
+        if day_match:
+            days_range = int(day_match.group(1))
+        elif week_match:
+            days_range = int(week_match.group(1)) * 7
+        elif month_match:
+            days_range = int(month_match.group(1)) * 30
+        else:
+            # Look for specific time phrases
+            if any(phrase in query_lower for phrase in ["today", "tonight"]):
+                days_range = 1
+                print(
+                    "[DEBUG] TIME PARSING - Found 'today' or 'tonight', setting range to 1 day"
+                )
+            elif "tomorrow" in query_lower:
+                days_range = 2  # Today + tomorrow
+                print(
+                    "[DEBUG] TIME PARSING - Found 'tomorrow', setting range to 2 days"
+                )
             elif "yesterday" in query_lower:
                 is_past = True
-                days_range = 1
-            elif "tomorrow" in query_lower:
-                is_past = False
-                days_range = 1
+                days_range = 2  # Today + yesterday
+                print(
+                    "[DEBUG] TIME PARSING - Found 'yesterday', setting range to 2 days (past)"
+                )
+            elif "this week" in query_lower:
+                days_range = 7
+                print(
+                    "[DEBUG] TIME PARSING - Found 'this week', setting range to 7 days"
+                )
+            elif "next week" in query_lower:
+                days_range = 14  # Covers this week + next week
+                print(
+                    "[DEBUG] TIME PARSING - Found 'next week', setting range to 14 days"
+                )
             elif "last week" in query_lower:
                 is_past = True
-                days_range = 7
-            elif "next week" in query_lower:
-                is_past = False
-                days_range = 7
-            elif "last month" in query_lower:
-                is_past = True
+                days_range = 14  # Covers this week + last week
+                print(
+                    "[DEBUG] TIME PARSING - Found 'last week', setting range to 14 days (past)"
+                )
+            elif "this month" in query_lower:
                 days_range = 30
-            elif "next month" in query_lower:
-                is_past = False
-                days_range = 30
+                print(
+                    "[DEBUG] TIME PARSING - Found 'this month', setting range to 30 days"
+                )
+            else:
+                print(
+                    "[DEBUG] TIME PARSING - No specific temporal phrases found, using defaults"
+                )
 
-        # Check for specific time ranges
-        day_range_match = None
+        # Special handling for queries looking for recent/last events
+        if any(word in query_lower for word in ["recent", "last", "latest"]):
+            reverse_chronological = True
+            print(
+                "[DEBUG] TIME PARSING - Found 'recent/last/latest', enabling reverse chronological order"
+            )
+            # For "last" queries, we should look much further back
+            if is_past:
+                days_range = 365  # Look back a full year for "last" queries
+                print(
+                    "[DEBUG] TIME PARSING - 'last' query with past context, extending days_range to 365 days"
+                )
 
-        # Check various patterns for day ranges
-        patterns = [
-            r"(?:past|next|last|coming|following)\s+(\d+)\s+days?",
-            r"(\d+)\s+days?\s+(?:ago|from now)",
-            r"within\s+(\d+)\s+days?",
-            r"(\d+)\s+days?\s+(?:before|after)",
-        ]
+    print(
+        f"[DEBUG] TIME PARSING - Final result: is_past={is_past}, days_range={days_range}, reverse_chronological={reverse_chronological}"
+    )
 
-        for pattern in patterns:
-            match = re.search(pattern, query_lower)
-            if match:
-                day_range_match = match
-                break
+    result = {
+        "is_past": is_past,
+        "days_range": days_range,
+        "reverse_chronological": reverse_chronological,
+    }
 
-        if day_range_match:
-            try:
-                days_range = int(day_range_match.group(1))
+    # Add specific date if found
+    if specific_date:
+        result["specific_date"] = specific_date
 
-                # Determine past/future based on context
-                if (
-                    "ago" in query_lower
-                    or "past" in query_lower
-                    or "last" in query_lower
-                ):
-                    is_past = True
-                elif (
-                    "from now" in query_lower
-                    or "next" in query_lower
-                    or "coming" in query_lower
-                ):
-                    is_past = False
-            except (ValueError, IndexError):
-                # If parsing fails, keep using defaults
-                pass
-
-    return is_past, days_range, reverse_chrono
+    return result
 
 
 def safe_record(record_func, *args, **kwargs):
@@ -334,6 +412,21 @@ def query_gpt(
         # Get current time for consistent date information
         current_time = datetime.now()
         current_time_str = current_time.strftime("%A, %B %d, %Y at %I:%M %p")
+
+        # Add debug information about events
+        if events:
+            print(f"[DEBUG] QUERY_GPT - Received {len(events)} events")
+            for i, event in enumerate(events[:5]):  # Show first 5 events for debugging
+                summary = event.get("summary", "Untitled")
+                start_time = event.get("start_time", "Unknown")
+                calendar = event.get("calendarName", "Unknown")
+                print(
+                    f"[DEBUG] QUERY_GPT - Event {i+1}: '{summary}' at {start_time} in {calendar}"
+                )
+            if len(events) > 5:
+                print(f"[DEBUG] QUERY_GPT - ... and {len(events) - 5} more events")
+        else:
+            print("[DEBUG] QUERY_GPT - No events provided")
 
         # Check event dates to determine if we're using test/mock data
         using_test_data = False
@@ -650,6 +743,7 @@ def get_calendar_service(force_refresh=False):
         Google Calendar service instance
     """
     global _service_cache
+    print("[DEBUG] GET_SERVICE - Entering get_calendar_service function")
 
     # Check if we have a cached service that's still valid
     current_time = time.time()
@@ -659,6 +753,7 @@ def get_calendar_service(force_refresh=False):
         and current_time - _service_cache["timestamp"] < _service_cache["ttl"]
     ):
         # Use cached service silently
+        print("[DEBUG] GET_SERVICE - Using cached service instance")
         safe_record(record_cache_operation, "hit", "calendar_service")
         return _service_cache["service"]
 
@@ -668,13 +763,18 @@ def get_calendar_service(force_refresh=False):
         client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
         token_file = os.path.expanduser("~/.orii/token.json")
 
+        print(f"[DEBUG] GET_SERVICE - Token file path: {token_file}")
+        print(f"[DEBUG] GET_SERVICE - Client ID available: {bool(client_id)}")
+        print(f"[DEBUG] GET_SERVICE - Client Secret available: {bool(client_secret)}")
+
         if not client_id or not client_secret:
-            print("ERROR: Missing Google API credentials in environment")
+            print("[ERROR] GET_SERVICE - Missing Google API credentials in environment")
             raise ValueError(
                 "Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET in environment variables"
             )
 
         creds = None
+        print(f"[DEBUG] GET_SERVICE - Token file exists: {os.path.exists(token_file)}")
 
         # Create .orii directory if it doesn't exist
         os.makedirs(os.path.dirname(token_file), exist_ok=True)
@@ -684,22 +784,42 @@ def get_calendar_service(force_refresh=False):
             try:
                 with open(token_file, "r") as token:
                     token_data = json.load(token)
+                    print("[DEBUG] GET_SERVICE - Successfully loaded token file")
                     creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+                    print(f"[DEBUG] GET_SERVICE - Credentials valid: {creds.valid}")
+                    print(
+                        f"[DEBUG] GET_SERVICE - Credentials expired: {creds.expired if hasattr(creds, 'expired') else 'unknown'}"
+                    )
+                    print(
+                        f"[DEBUG] GET_SERVICE - Has refresh token: {bool(creds.refresh_token) if hasattr(creds, 'refresh_token') else False}"
+                    )
             except json.JSONDecodeError as e:
-                print(f"Error: Token file contains invalid JSON: {str(e)}")
-            except Exception:
+                print(
+                    f"[ERROR] GET_SERVICE - Token file contains invalid JSON: {str(e)}"
+                )
+            except Exception as e:
+                print(f"[ERROR] GET_SERVICE - Error loading credentials: {str(e)}")
                 # If there's an error loading credentials, we'll create new ones
                 pass
 
         # If credentials don't exist or are invalid
         if not creds or not creds.valid:
+            print("[DEBUG] GET_SERVICE - Need to refresh or create new credentials")
             if creds and creds.expired and creds.refresh_token:
                 try:
+                    print("[DEBUG] GET_SERVICE - Refreshing expired credentials")
                     creds.refresh(Request())
-                except Exception:
+                    print("[DEBUG] GET_SERVICE - Successfully refreshed credentials")
+                except Exception as e:
+                    print(
+                        f"[ERROR] GET_SERVICE - Failed to refresh credentials: {str(e)}"
+                    )
                     creds = None
 
             if not creds:
+                print(
+                    "[DEBUG] GET_SERVICE - Need to create new credentials through OAuth flow"
+                )
                 # Create credentials configuration
                 client_config = {
                     "installed": {
@@ -718,45 +838,73 @@ def get_calendar_service(force_refresh=False):
                 )
 
                 # Run the OAuth2 flow
-                print("Opening browser for Google authentication...")
+                print(
+                    "[DEBUG] GET_SERVICE - Opening browser for Google authentication..."
+                )
                 creds = flow.run_local_server(
                     port=0, access_type="offline", include_granted_scopes="true"
                 )
+                print("[DEBUG] GET_SERVICE - Successfully completed OAuth flow")
 
             # Save the credentials
             try:
                 with open(token_file, "w") as token:
-                    token.write(creds.to_json())
-            except Exception:
+                    token_json = creds.to_json()
+                    token.write(token_json)
+                    print(
+                        "[DEBUG] GET_SERVICE - Successfully saved credentials to file"
+                    )
+            except Exception as e:
+                print(f"[ERROR] GET_SERVICE - Failed to save credentials: {str(e)}")
                 # Continue even if we can't save credentials
                 pass
 
         # Build and return the service
+        print("[DEBUG] GET_SERVICE - Building Google Calendar service")
         service = build("calendar", "v3", credentials=creds)
 
         # Verify service is working by making a simple API call
         try:
             # List available calendars as a test
+            print(
+                "[DEBUG] GET_SERVICE - Testing service with calendarList.list() API call"
+            )
             calendar_list = service.calendarList().list(maxResults=10).execute()
             calendars = calendar_list.get("items", [])
+            print(
+                f"[DEBUG] GET_SERVICE - Service test successful, found {len(calendars)} calendars"
+            )
+            # Print out calendar names for debugging
+            if calendars:
+                calendar_names = [
+                    cal.get("summary", "Unnamed") for cal in calendars[:5]
+                ]
+                print(
+                    f"[DEBUG] GET_SERVICE - Available calendars: {', '.join(calendar_names)}"
+                )
         except Exception as e:
-            print(f"WARNING: Calendar API test request failed: {str(e)}")
+            print(f"[ERROR] GET_SERVICE - Calendar API test request failed: {str(e)}")
+            if hasattr(e, "content"):
+                print(f"[ERROR] GET_SERVICE - API error details: {e.content}")
 
         # Cache the service
         _service_cache["service"] = service
         _service_cache["timestamp"] = current_time
+        print("[DEBUG] GET_SERVICE - Service cached successfully")
         safe_record(record_cache_operation, "miss", "calendar_service")
 
         return service
 
     except Exception as e:
-        print(f"Error in calendar service setup: {str(e)}")
+        print(f"[ERROR] GET_SERVICE - Error in calendar service setup: {str(e)}")
         import traceback
 
-        print("\nFull traceback:")
+        print("[ERROR] GET_SERVICE - Full traceback:")
         print(traceback.format_exc())
         if isinstance(e, ValueError):
-            print("Please check your credentials and try authenticating again")
+            print(
+                "[ERROR] GET_SERVICE - Please check your credentials and try authenticating again"
+            )
         raise
 
 
@@ -770,22 +918,67 @@ def get_calendar_list(service):
     Returns:
         List of calendars from the Calendar API
     """
-    calendar_list = service.calendarList().list().execute()
-    return calendar_list.get("items", [])
+    try:
+        print("[DEBUG] GET_CALENDAR_LIST - Fetching calendar list from API")
+        calendar_list = service.calendarList().list().execute()
+        calendars = calendar_list.get("items", [])
+        print(f"[DEBUG] GET_CALENDAR_LIST - Retrieved {len(calendars)} calendars")
+
+        # Log calendar details for debugging
+        if calendars:
+            for i, cal in enumerate(calendars):
+                print(
+                    f"[DEBUG] Calendar {i+1}: ID={cal.get('id')} Name={cal.get('summary')} Selected={cal.get('selected', False)} Primary={cal.get('primary', False)}"
+                )
+        else:
+            print("[DEBUG] GET_CALENDAR_LIST - No calendars found!")
+
+        return calendars
+    except Exception as e:
+        print(f"[ERROR] GET_CALENDAR_LIST - Error fetching calendar list: {str(e)}")
+        if hasattr(e, "content"):
+            print(f"[ERROR] GET_CALENDAR_LIST - API error details: {e.content}")
+        return []
 
 
-def get_events(is_past, days_range, search_terms=None, reverse_chronological=False):
-    """Get calendar events based on specified parameters.
+def get_events(
+    is_past,
+    days_range,
+    search_terms=None,
+    reverse_chronological=False,
+    include_all_calendars=True,
+    specific_date=None,
+):
+    """Get events from Google Calendar within a time range
 
     Args:
-        is_past: Boolean indicating if we're searching in the past
+        is_past: Whether to search in the past (vs. future)
         days_range: Number of days to search
         search_terms: Optional search terms to filter events
         reverse_chronological: Order events from newest to oldest (for "last/recent" queries)
+        include_all_calendars: Whether to include all accessible calendars or just the primary
+        specific_date: Optional specific date to query (overrides is_past and days_range)
 
     Returns:
         List of event objects
     """
+    print(
+        f"[DEBUG] GET_EVENTS - is_past={is_past}, days_range={days_range}, search_terms={search_terms}, "
+        f"reverse_chronological={reverse_chronological}, include_all_calendars={include_all_calendars}, "
+        f"specific_date={specific_date}"
+    )
+
+    # Print out search terms if present
+    if search_terms:
+        if isinstance(search_terms, list):
+            print(
+                f"[DEBUG] GET_EVENTS - Will filter events with search terms: {', '.join(search_terms)}"
+            )
+        else:
+            print(
+                f"[DEBUG] GET_EVENTS - Will filter events with search term: {search_terms}"
+            )
+
     # Ensure days_range is an integer
     if not isinstance(days_range, int):
         try:
@@ -795,138 +988,479 @@ def get_events(is_past, days_range, search_terms=None, reverse_chronological=Fal
 
     try:
         # Get calendar service
+        print("[DEBUG] GET_EVENTS - Attempting to get calendar service")
         service = get_calendar_service()
+        print("[DEBUG] GET_EVENTS - Successfully got calendar service")
 
-        # Calculate time range
-        now = datetime.utcnow().isoformat() + "Z"
+        # Calculate time range with RFC3339 format that Google Calendar API requires
+        now = datetime.now(timezone.utc)  # Use timezone-aware datetime
+        # Always format the current time
+        now_formatted = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        print(f"[DEBUG] GET_EVENTS - Current UTC time: {now.isoformat()}")
 
-        if is_past:
-            # Search in the past up to days_range days ago
-            time_min = (
-                datetime.utcnow() - timedelta(days=days_range)
-            ).isoformat() + "Z"
-            time_max = now
+        # Handle specific date if provided
+        if specific_date:
+            print(f"[DEBUG] GET_EVENTS - Using specific date: {specific_date}")
+
+            # Check if specific_date has a date() method (is a datetime object)
+            if hasattr(specific_date, "date"):
+                specific_date_date = specific_date.date()
+            else:
+                # If it's already a date object
+                specific_date_date = specific_date
+
+            print(
+                f"[DEBUG] GET_EVENTS - Specific date converted to: {specific_date_date}"
+            )
+
+            # Create start and end of the specific date
+            start_of_day = datetime.combine(specific_date_date, datetime.min.time())
+            end_of_day = datetime.combine(specific_date_date, datetime.max.time())
+
+            # Add timezone info
+            start_of_day = start_of_day.replace(tzinfo=timezone.utc)
+            end_of_day = end_of_day.replace(tzinfo=timezone.utc)
+
+            # Format to RFC3339
+            time_min = start_of_day.strftime("%Y-%m-%dT%H:%M:%SZ")
+            time_max = end_of_day.strftime("%Y-%m-%dT%H:%M:%SZ")
+            print(
+                f"[DEBUG] GET_EVENTS - Specific date time range: {time_min} to {time_max}"
+            )
         else:
-            # Search in the future up to days_range days ahead
-            time_min = now
-            time_max = (
-                datetime.utcnow() + timedelta(days=days_range)
-            ).isoformat() + "Z"
-
-        # Fetch primary calendar events
-        calendar_id = "primary"
-
-        # Prepare query parameters
-        query_params = {
-            "calendarId": calendar_id,
-            "timeMin": time_min,
-            "timeMax": time_max,
-            "singleEvents": True,
-            "maxResults": 2500,  # Get a large number to ensure we don't miss anything
-        }
-
-        # Set order based on search direction
-        if reverse_chronological:
-            # For "last" queries, we want newest events first
-            query_params["orderBy"] = "startTime" if not is_past else "startTime"
-            # We'll handle reverse sorting after fetching since the API doesn't support descending order
-        else:
-            # Default case - chronological order
-            query_params["orderBy"] = "startTime"
-
-        # Add search terms if provided
-        if search_terms:
-            query_params["q"] = search_terms
-
-        events_result = service.events().list(**query_params).execute()
-        events = events_result.get("items", [])
-
-        # Process and format events
-        processed_events = []
-        for event in events:
-            # Skip cancelled events
-            if event.get("status") == "cancelled":
-                continue
-
-            # Extract event details
-            event_id = event.get("id", "")
-            summary = event.get("summary", "Untitled Event")
-            description = event.get("description", "")
-            location = event.get("location", "")
-            organizer = event.get("organizer", {}).get("email", "")
-
-            # Extract start and end times
-            start = event.get("start", {})
-            end = event.get("end", {})
-
-            # Handle all-day events vs. timed events
-            if "date" in start:  # All-day event
-                start_time = start.get("date", "")
-                end_time = end.get("date", "")
-                is_all_day = True
-
-                # Parse timestamps for sorting
-                start_dt = datetime.fromisoformat(start_time)
-                end_dt = datetime.fromisoformat(end_time)
-            else:  # Timed event
-                start_time = start.get("dateTime", "")
-                end_time = end.get("dateTime", "")
-                is_all_day = False
-
-                # Parse timestamps for sorting
-                start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-                end_dt = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
-
-            # Parse attendees
-            attendees = []
-            for attendee in event.get("attendees", []):
-                attendee_email = attendee.get("email", "")
-                attendee_name = attendee.get("displayName", attendee_email)
-                response_status = attendee.get("responseStatus", "")
-
-                attendees.append(
-                    {
-                        "email": attendee_email,
-                        "name": attendee_name,
-                        "response_status": response_status,
-                    }
+            # Format dates in the RFC3339 format without microseconds
+            if is_past:
+                # Search in the past up to days_range days ago
+                past_date = now - timedelta(days=days_range)
+                time_min = past_date.strftime("%Y-%m-%dT%H:%M:%SZ")
+                time_max = now_formatted
+                print(f"[DEBUG] GET_EVENTS - Past time range: {time_min} to {time_max}")
+            else:
+                # Search in the future up to days_range days ahead
+                future_date = now + timedelta(days=days_range)
+                time_min = now_formatted
+                time_max = future_date.strftime("%Y-%m-%dT%H:%M:%SZ")
+                print(
+                    f"[DEBUG] GET_EVENTS - Future time range: {time_min} to {time_max}"
                 )
 
-            # Create processed event object
-            processed_event = {
-                "id": event_id,
-                "summary": summary,
-                "description": description,
-                "location": location,
-                "organizer": organizer,
-                "start_time": start_time,
-                "end_time": end_time,
-                "is_all_day": is_all_day,
-                "attendees": attendees,
-                # Add calendar ID for filtering
+        # Log all available calendars for debugging
+        all_calendars = get_calendar_list(service)
+        print(f"[DEBUG] GET_EVENTS - Found {len(all_calendars)} available calendars")
+
+        # Prepare the list of calendars to query
+        calendars_to_query = []
+
+        if include_all_calendars:
+            # Get all selected calendars
+            print("[DEBUG] GET_EVENTS - Including all selected calendars")
+            selected_count = 0
+            total_count = len(all_calendars)
+            for cal in all_calendars:
+                selected = cal.get("selected", False)
+                cal_summary = cal.get("summary", "Unnamed Calendar")
+                print(
+                    f"[DEBUG] GET_EVENTS - Calendar '{cal_summary}' selected: {selected}"
+                )
+
+                if selected:
+                    selected_count += 1
+                    access_role = cal.get("accessRole", "unknown")
+                    calendars_to_query.append(
+                        {
+                            "id": cal.get("id"),
+                            "summary": cal_summary,
+                            "primary": cal.get("primary", False),
+                            "color": cal.get("backgroundColor", "#4285F4"),
+                            "accessRole": access_role,
+                        }
+                    )
+                    print(
+                        f"[DEBUG] GET_EVENTS - ADDED calendar '{cal_summary}' (selected=True) with access role: {access_role}"
+                    )
+                else:
+                    print(
+                        f"[DEBUG] GET_EVENTS - SKIPPED calendar '{cal_summary}' (selected=False)"
+                    )
+
+            print(
+                f"[DEBUG] GET_EVENTS - Will query {len(calendars_to_query)} selected calendars out of {total_count} total calendars"
+            )
+        else:
+            # Just use primary calendar
+            print("[DEBUG] GET_EVENTS - Including only primary calendar")
+            primary_cal = next(
+                (cal for cal in all_calendars if cal.get("primary", False)), None
+            )
+            if primary_cal:
+                access_role = primary_cal.get("accessRole", "unknown")
+                calendars_to_query.append(
+                    {
+                        "id": primary_cal.get("id", "primary"),
+                        "summary": primary_cal.get("summary", "Primary Calendar"),
+                        "primary": True,
+                        "color": primary_cal.get("backgroundColor", "#4285F4"),
+                        "accessRole": access_role,
+                    }
+                )
+                print(
+                    f"[DEBUG] GET_EVENTS - Added primary calendar with access role: {access_role}"
+                )
+            else:
+                calendars_to_query.append(
+                    {
+                        "id": "primary",
+                        "summary": "Primary Calendar",
+                        "primary": True,
+                        "color": "#4285F4",
+                        "accessRole": "unknown",
+                    }
+                )
+                print(
+                    "[DEBUG] GET_EVENTS - Using default primary calendar (no primary detected in list)"
+                )
+
+        # Error if no calendars to query
+        if not calendars_to_query:
+            print("[ERROR] GET_EVENTS - No calendars available to query")
+            return []
+
+        # Process events from all selected calendars
+        all_processed_events = []
+
+        for calendar in calendars_to_query:
+            calendar_id = calendar["id"]
+            calendar_name = calendar["summary"]
+            access_role = calendar.get("accessRole", "unknown")
+            print(
+                f"[DEBUG] GET_EVENTS - Querying calendar: {calendar_name} (ID: {calendar_id}, Access: {access_role})"
+            )
+
+            # Prepare query parameters
+            query_params = {
                 "calendarId": calendar_id,
-                # Add timestamps for sorting
-                "start_dt": start_dt,
-                "end_dt": end_dt,
-                # Add parsed datetime objects for easier access
-                "parsed_start": start_dt,
-                "parsed_end": end_dt,
-                # Include original event data for reference
-                "raw_event": event,
+                "timeMin": time_min,
+                "timeMax": time_max,
+                "singleEvents": True,
+                "maxResults": 2500,  # Get a large number to ensure we don't miss anything
             }
 
-            processed_events.append(processed_event)
+            # Set order based on search direction
+            if reverse_chronological:
+                # For "last" queries, we want newest events first, but Google Calendar API
+                # only allows "startTime" as the orderBy parameter, so we'll sort manually later
+                query_params["orderBy"] = "startTime"
+                print("[DEBUG] GET_EVENTS - Using reverse chronological ordering")
 
-        # Apply reverse chronological sorting if requested (for "last" queries)
-        if reverse_chronological and is_past:
-            processed_events.sort(key=lambda e: e["start_dt"], reverse=True)
+            print(f"[DEBUG] GET_EVENTS - API query parameters: {query_params}")
 
-        return processed_events
+            try:
+                print(
+                    f"[DEBUG] GET_EVENTS - Making API call to Google Calendar for {calendar_name}"
+                )
+                print(
+                    f"[DEBUG] GET_EVENTS - Detailed query parameters: {json.dumps(query_params, default=str)}"
+                )
+                events_result = service.events().list(**query_params).execute()
+                raw_events = events_result.get("items", [])
+                print(
+                    f"[DEBUG] GET_EVENTS - Retrieved {len(raw_events)} raw events from {calendar_name}"
+                )
+
+                # If no events but we expect some, try to debug
+                if not raw_events:
+                    print(
+                        f"[DEBUG] GET_EVENTS - No events found for {calendar_name}. Testing direct API access..."
+                    )
+                    # Try a simple calendar API call to see if we can access anything
+                    try:
+                        cal_metadata = (
+                            service.calendars().get(calendarId=calendar_id).execute()
+                        )
+                        print(
+                            f"[DEBUG] GET_EVENTS - Successfully accessed calendar metadata: {cal_metadata.get('summary')}"
+                        )
+
+                        # Try listing events without search terms/filters
+                        print(
+                            f"[DEBUG] GET_EVENTS - Trying to list events without filters for {calendar_name}"
+                        )
+                        basic_params = {
+                            "calendarId": calendar_id,
+                            "timeMin": time_min,
+                            "timeMax": time_max,
+                            "singleEvents": True,
+                            "maxResults": 10,
+                            "orderBy": "startTime",
+                        }
+                        basic_result = service.events().list(**basic_params).execute()
+                        basic_events = basic_result.get("items", [])
+                        print(
+                            f"[DEBUG] GET_EVENTS - Without filters: found {len(basic_events)} events"
+                        )
+
+                        if basic_events:
+                            # We found events without filters, so ignore search terms and use this data
+                            print(
+                                f"[DEBUG] GET_EVENTS - Using events without search term filter"
+                            )
+                            raw_events = basic_events
+
+                    except Exception as cal_error:
+                        print(
+                            f"[ERROR] GET_EVENTS - Failed to access calendar metadata: {str(cal_error)}"
+                        )
+                        if hasattr(cal_error, "content"):
+                            print(
+                                f"[ERROR] GET_EVENTS - Calendar access error details: {cal_error.content}"
+                            )
+
+                # Log the first event for debugging (if any exists)
+                if raw_events:
+                    print(
+                        f"[DEBUG] GET_EVENTS - First event preview: {raw_events[0].get('summary', 'No summary')} at {raw_events[0].get('start', {})}"
+                    )
+
+                # Process events for this calendar
+                calendar_events = raw_events  # Use raw_events instead of events_result.get("items", [])
+                processed_events = []
+
+                # Apply search term filtering if needed
+                if search_terms:
+                    print(
+                        f"[DEBUG] GET_EVENTS - Filtering {len(calendar_events)} events with search terms: {search_terms}"
+                    )
+                    filtered_events = []
+                    for event in calendar_events:
+                        event_summary = event.get("summary", "").lower()
+                        event_description = event.get("description", "").lower()
+                        event_location = event.get("location", "").lower()
+
+                        # Combine all event text for searching
+                        event_text = (
+                            f"{event_summary} {event_description} {event_location}"
+                        )
+
+                        # Check if any search term matches the event
+                        matches = False
+                        matching_terms = []
+
+                        if isinstance(search_terms, list):
+                            for term in search_terms:
+                                if term.lower() in event_text:
+                                    matches = True
+                                    matching_terms.append(term)
+                        else:
+                            # If search_terms is a string, check if it's in the event text
+                            if search_terms.lower() in event_text:
+                                matches = True
+                                matching_terms = [search_terms]
+
+                        if matches:
+                            filtered_events.append(event)
+                            print(
+                                f"[DEBUG] GET_EVENTS - Event '{event_summary}' matched search terms: {matching_terms}"
+                            )
+                        else:
+                            print(
+                                f"[DEBUG] GET_EVENTS - Event '{event_summary}' did NOT match any search terms"
+                            )
+
+                    # Update calendar_events with the filtered list
+                    print(
+                        f"[DEBUG] GET_EVENTS - Filtered from {len(calendar_events)} to {len(filtered_events)} events"
+                    )
+                    calendar_events = filtered_events
+
+                print(
+                    f"[DEBUG] GET_EVENTS - Processing {len(calendar_events)} events for {calendar_name}"
+                )
+                print(f"[DEBUG] GET_EVENTS - Time range: {time_min} to {time_max}")
+
+                for event in calendar_events:
+                    # Skip cancelled events
+                    if event.get("status") == "cancelled":
+                        continue
+
+                    # Extract event details
+                    event_id = event.get("id", "")
+                    summary = event.get("summary", "Untitled Event")
+                    description = event.get("description", "")
+                    location = event.get("location", "")
+                    organizer = event.get("organizer", {}).get("email", "")
+
+                    # Extract start and end times
+                    start = event.get("start", {})
+                    end = event.get("end", {})
+
+                    print(
+                        f"[DEBUG] GET_EVENTS - Processing event: '{summary}' with start: {start}"
+                    )
+
+                    # Handle all-day events vs. timed events
+                    try:
+                        if "date" in start:  # All-day event
+                            start_time = start.get("date", "")
+                            end_time = end.get("date", "")
+                            is_all_day = True
+
+                            # Parse timestamps for sorting - add timezone info to all-day events
+                            start_dt = datetime.fromisoformat(start_time).replace(
+                                tzinfo=timezone.utc
+                            )
+                            end_dt = datetime.fromisoformat(end_time).replace(
+                                tzinfo=timezone.utc
+                            )
+                        else:  # Timed event
+                            start_time = start.get("dateTime", "")
+                            end_time = end.get("dateTime", "")
+                            is_all_day = False
+
+                            # Parse timestamps for sorting
+                            start_dt = datetime.fromisoformat(
+                                start_time.replace("Z", "+00:00")
+                            )
+                            end_dt = datetime.fromisoformat(
+                                end_time.replace("Z", "+00:00")
+                            )
+
+                        # Check if this event falls within our time range
+                        now = datetime.now(timezone.utc)
+                        future_date = now + timedelta(days=days_range)
+
+                        # Process this event
+                        # Parse attendees
+                        attendees = []
+                        for attendee in event.get("attendees", []):
+                            attendee_email = attendee.get("email", "")
+                            attendee_name = attendee.get("displayName", attendee_email)
+                            response_status = attendee.get("responseStatus", "")
+
+                            attendees.append(
+                                {
+                                    "email": attendee_email,
+                                    "name": attendee_name,
+                                    "response_status": response_status,
+                                }
+                            )
+
+                        # Create processed event object
+                        processed_event = {
+                            "id": event_id,
+                            "summary": summary,
+                            "description": description,
+                            "location": location,
+                            "organizer": organizer,
+                            "start_time": start_time,
+                            "end_time": end_time,
+                            "is_all_day": is_all_day,
+                            "attendees": attendees,
+                            # Add calendar ID and name for filtering
+                            "calendarId": calendar_id,
+                            "calendarName": calendar_name,
+                            "calendarColor": calendar.get("color"),
+                            "primary": calendar.get("primary", False),
+                            # Add timestamps for sorting
+                            "start_dt": start_dt,
+                            "end_dt": end_dt,
+                            # Add parsed datetime objects for easier access
+                            "parsed_start": start_dt,
+                            "parsed_end": end_dt,
+                            # Include original event data for reference
+                            "raw_event": event,
+                        }
+
+                        processed_events.append(processed_event)
+
+                        # Add debug message for each processed event
+                        print(
+                            f"[DEBUG] GET_EVENTS - Added event '{summary}' from {calendar_name} on {start_dt.date()}"
+                        )
+
+                    except Exception as e:
+                        print(
+                            f"[DEBUG] GET_EVENTS - Error processing event {summary}: {str(e)}"
+                        )
+                        # Try with minimal info in case of parsing error
+                        try:
+                            processed_event = {
+                                "id": event_id,
+                                "summary": summary,
+                                "description": description,
+                                "location": location,
+                                "calendarId": calendar_id,
+                                "calendarName": calendar_name,
+                                "is_all_day": "date" in start,
+                                "start_time": start.get(
+                                    "date", start.get("dateTime", "")
+                                ),
+                                "end_time": end.get("date", end.get("dateTime", "")),
+                                "raw_event": event,
+                            }
+                            processed_events.append(processed_event)
+                        except:
+                            # Skip this event if we can't process it at all
+                            continue
+
+                # Add this calendar's events to the main list
+                all_processed_events.extend(processed_events)
+                print(
+                    f"[DEBUG] GET_EVENTS - Processed {len(processed_events)} events from {calendar_name}"
+                )
+
+                if specific_date:
+                    print(
+                        f"[DEBUG] GET_EVENTS - For specific date {specific_date.date()}, found {len(processed_events)} events"
+                    )
+            except Exception as api_error:
+                print(
+                    f"[ERROR] GET_EVENTS - API call error for {calendar_name}: {str(api_error)}"
+                )
+                if hasattr(api_error, "content"):
+                    print(
+                        f"[ERROR] GET_EVENTS - API error details: {api_error.content}"
+                    )
+                # Continue to next calendar rather than crashing
+                continue
+
+        # Sort all events chronologically (or reverse)
+        all_processed_events.sort(
+            key=lambda e: e["start_dt"], reverse=reverse_chronological
+        )
+
+        if specific_date:
+            # Extra debug information for specific date queries
+            date_str = (
+                specific_date.date()
+                if hasattr(specific_date, "date")
+                else specific_date
+            )
+            print(
+                f"[DEBUG] GET_EVENTS - After sorting, for specific date {date_str}, found {len(all_processed_events)} total events"
+            )
+
+            # Print all event summaries for debugging
+            for event in all_processed_events:
+                start_dt = event.get("start_dt")
+                summary = event.get("summary")
+                calendar_name = event.get("calendarName")
+                print(
+                    f"[DEBUG] GET_EVENTS - Event: '{summary}' on {start_dt} from {calendar_name}"
+                )
+
+        print(
+            f"[DEBUG] GET_EVENTS - Fetched {len(all_processed_events)} total processed events from all calendars"
+        )
+        return all_processed_events
 
     except Exception as e:
-        print(f"Error fetching events: {str(e)}")
+        print(f"[ERROR] GET_EVENTS - Error fetching events: {str(e)}")
+        import traceback
+
+        print("[ERROR] GET_EVENTS - Full traceback:")
+        print(traceback.format_exc())
         if hasattr(e, "content"):
-            print(f"Detailed error: {e.content}")
+            print(f"[ERROR] GET_EVENTS - Detailed error: {e.content}")
         return []
 
 
@@ -1165,396 +1699,223 @@ def get_user_identifier(service):
 
 
 def format_event_text(event):
-    """Format a single event for display"""
-    try:
-        summary = event.get("summary", "Untitled Event")
-        calendar_name = event.get("calendarName", "Primary Calendar")
-        calendar_color = event.get("calendarColor", "")
+    """Format an event for text-based output.
 
-        # Use parsed times for consistent formatting
-        start_time = event.get("parsed_start")
-        end_time = event.get("parsed_end")
+    Args:
+        event: Event dictionary with details
 
-        if start_time and end_time:
-            # Check if it's an all-day event
-            is_all_day = (
-                start_time.hour == 0
-                and start_time.minute == 0
-                and end_time.hour == 23
-                and end_time.minute == 59
-                and end_time.second == 59
-            )
+    Returns:
+        Formatted string describing the event
+    """
+    summary = event.get("summary", "Untitled Event")
+    calendar_name = event.get("calendarName", "Unknown Calendar")
 
-            if is_all_day:
-                start_str = start_time.strftime("%Y-%m-%d")
-                time_str = f"{start_str} (All day)"
+    # Format start and end times based on whether it's an all-day event
+    if event.get("is_all_day"):
+        start = event.get("start_time")
+        end = event.get("end_time")
+
+        # Parse dates and format them
+        try:
+            start_date = datetime.fromisoformat(start)
+            end_date = datetime.fromisoformat(end)
+            end_date = end_date - timedelta(
+                days=1
+            )  # End date is exclusive in all-day events
+
+            # Same day
+            if start_date.date() == end_date.date():
+                time_str = f"{start_date.strftime('%Y-%m-%d')} (All day)"
             else:
-                # Format times in local timezone
-                local_start = start_time.astimezone()
-                local_end = end_time.astimezone()
+                time_str = f"{start_date.strftime('%Y-%m-%d')} - {end_date.strftime('%Y-%m-%d')} (All day)"
+        except (ValueError, TypeError):
+            time_str = f"{start} - {end} (All day)"
+    else:
+        start = event.get("start_time")
+        end = event.get("end_time")
 
-                # If same day, only show time for end
-                if local_start.date() == local_end.date():
-                    time_str = f"{local_start.strftime('%Y-%m-%d %I:%M %p')} - {local_end.strftime('%I:%M %p')}"
-                else:
-                    time_str = f"{local_start.strftime('%Y-%m-%d %I:%M %p')} - {local_end.strftime('%Y-%m-%d %I:%M %p')}"
+        # Parse and format datetime strings
+        try:
+            start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
 
-            # Add duration
-            duration = event.get("duration", 0)
-            if duration > 0:
-                time_str += f" ({duration:.1f} hours)"
-        else:
-            # Fallback to raw data if parsing failed
-            start = event.get("start", {})
-            if "dateTime" in start:
-                time_str = start["dateTime"]
-            elif "date" in start:
-                time_str = f"{start['date']} (All day)"
+            # Convert to local time for display
+            local_tz = datetime.now().astimezone().tzinfo
+            start_local = start_dt.astimezone(local_tz)
+            end_local = end_dt.astimezone(local_tz)
+
+            # Same day
+            if start_local.date() == end_local.date():
+                time_str = f"{start_local.strftime('%Y-%m-%d %I:%M %p')} - {end_local.strftime('%I:%M %p')}"
             else:
-                time_str = "No time specified"
+                time_str = f"{start_local.strftime('%Y-%m-%d %I:%M %p')} - {end_local.strftime('%Y-%m-%d %I:%M %p')}"
+        except (ValueError, TypeError):
+            time_str = f"{start} - {end}"
 
-        # Add additional details if available
-        details = []
-        if event.get("location"):
-            details.append(f"Location: {event['location']}")
-        if event.get("hangoutLink"):
-            details.append(f"Meet: {event['hangoutLink']}")
-        if calendar_color:
-            details.append(f"Color: {calendar_color}")
+    # Format location if available
+    location = event.get("location", "")
+    location_str = f" @ {location}" if location else ""
 
-        # Combine all information
-        event_text = f"{summary} at {time_str} ({calendar_name})"
-        if details:
-            event_text += f" - {', '.join(details)}"
+    # Create base formatted string
+    result = f"{summary}\n   {summary} at {time_str} ({calendar_name})"
 
-        return event_text
-    except Exception:
-        # Silently return basic string representation on error
-        return str(event)  # Fallback to string representation
+    return result
 
 
 def chat_mode(include_all_calendars=True):
-    session = PromptSession(style=style)
+    """Main chat interaction loop for the CLI.
+
+    Args:
+        include_all_calendars: Whether to include all visible calendars or just primary
+    """
+    print()
+    print("Welcome to ORII, your calendar assistant.")
+    print("Type 'exit' or 'quit' to end the conversation.")
+    print()
+
     service = get_calendar_service()
 
-    # Get user identifier safely
-    user_id = get_user_identifier(service)
-    session_id = str(uuid.uuid4())
-    conversation_history = []
+    # Track conversation for context
+    conversation = []
 
-    print("\n🗓️  ORII Calendar Assistant\n")
-    print(
-        "I can search through your calendars, looking at both past and future events."
-    )
-    print("I can also create and delete events directly.")
-    print("To exit, type 'exit', 'quit', or 'bye'.\n")
+    # Main interaction loop
+    while True:
+        # Get user input
+        prompt = colored("\nYou: ", "green")
+        query = input(prompt)
+        query = query.strip()
 
-    # Track session start
-    track_user_action(
-        user_id=user_id,
-        event_name="session_started",
-        properties={"session_id": session_id, "mode": "chat"},
-    )
-    session_start_time = time.time()
+        # Check for exit command
+        if query.lower() in ["exit", "quit", "bye", "goodbye"]:
+            print("\nOrii: Goodbye! Have a great day.")
+            break
 
-    try:
-        while True:
-            try:
-                user_input = session.prompt("You: ")
+        if not query:
+            continue
 
-                if user_input.lower() in ["exit", "quit", "bye"]:
-                    # Track session end
-                    track_user_action(
-                        user_id=user_id,
-                        event_name="session_ended",
-                        properties={
-                            "session_id": session_id,
-                            "mode": "chat",
-                            "duration": time.time() - session_start_time,
-                        },
-                    )
-                    print("Goodbye! 👋")
-                    break
+        # Record the start time for performance tracking
+        start_time = time.time()
 
-                # Track user query
-                track_user_action(
-                    user_id=user_id,
-                    event_name="user_query",
-                    properties={
-                        "session_id": session_id,
-                        "query_length": len(user_input),
-                        "mode": "chat",
-                    },
+        # Process the query
+        try:
+            # Parse time range from query (e.g., "today", "next week")
+            time_range = parse_time_range(query)
+            is_past = time_range["is_past"]
+            days_range = time_range["days_range"]
+            reverse_chronological = time_range["reverse_chronological"]
+            specific_date = time_range.get("specific_date")
+
+            # Detect intent
+            intent = determine_query_intent(query)
+            print(f"[DEBUG] Detected intent: {intent}")
+
+            if intent == "LIST_EVENTS":
+                # Get search terms for more specific filtering
+                search_terms = extract_search_terms(query)
+
+                # Get events based on time range and search terms - don't use search terms for initial fetch
+                events = get_events(
+                    is_past=is_past,
+                    days_range=days_range,
+                    search_terms=None,  # Don't use search terms for initial fetch
+                    reverse_chronological=reverse_chronological,
+                    include_all_calendars=include_all_calendars,
+                    specific_date=specific_date,
                 )
 
-                # First, check if this is an event creation request
-                creation_details = parse_event_creation_details(user_input)
-                if creation_details:
-                    # Handle event creation directly without using LLM
-                    try:
-                        # Check if a specific calendar was mentioned
-                        calendar_id = "primary"
-                        if "calendar_name" in creation_details:
-                            specific_cal_id = extract_calendar_id(
-                                service, creation_details["calendar_name"], user_id
+                if events:
+                    # Format response
+                    response = f"I found {len(events)} "
+                    response += "upcoming " if not is_past else "recent "
+                    response += "events"
+                    if len(events) > 0:
+                        response += f" across {len(set(e.get('calendarName') for e in events))} calendars:\n\n"
+
+                        # Display a limited number of events (10)
+                        max_display = min(10, len(events))
+                        for i, event in enumerate(events[:max_display], 1):
+                            response += f"{i}. {event.get('summary')}\n"
+                            response += f"   {event.get('summary')} at {format_datetime_range(event.get('start_time'), event.get('end_time'), event.get('is_all_day'))} ({event.get('calendarName')})\n\n"
+
+                        if len(events) > max_display:
+                            response += (
+                                f"...and {len(events) - max_display} more events.\n"
                             )
-                            if specific_cal_id:
-                                calendar_id = specific_cal_id
+                else:
+                    response = "I couldn't find any "
+                    response += "upcoming " if not is_past else "past "
+                    response += "events matching your criteria."
 
-                        # Create the event
-                        event = create_event(service, creation_details, calendar_id)
+            # The issue is here: we've detected the intent is not "LIST_EVENTS" but something else
+            # We're not handling the "calendar_query" intent, and we're not using a default case
+            # Let's add a check for "calendar_query" intent and have a fallback for all other intents
 
-                        # Format response
-                        start_time = creation_details["start_time"].strftime("%I:%M %p")
-                        end_time = creation_details["end_time"].strftime("%I:%M %p")
-                        date_str = creation_details["start_time"].strftime(
-                            "%A, %B %d, %Y"
-                        )
+            elif intent.get("intent_type") == "calendar_query":
+                # Get events based on time range
+                search_terms = extract_search_terms(query)
 
-                        response = f"Created event: '{creation_details['summary']}' on {date_str} from {start_time} to {end_time}"
-
-                        if "location" in creation_details:
-                            response += f" at {creation_details['location']}"
-
-                        if (
-                            "add_meet" in creation_details
-                            and creation_details["add_meet"]
-                        ):
-                            if event.get("hangoutLink"):
-                                response += f"\nMeet link: {event['hangoutLink']}"
-
-                        # Add to conversation history
-                        conversation_history.extend(
-                            [
-                                {"role": "user", "content": user_input},
-                                {"role": "assistant", "content": response},
-                            ]
-                        )
-
-                        click.echo(f"\nORII: {response}\n")
-                        continue  # Skip LLM call
-                    except Exception as e:
-                        error_msg = f"Sorry, I couldn't create that event: {str(e)}"
-                        conversation_history.extend(
-                            [
-                                {"role": "user", "content": user_input},
-                                {"role": "assistant", "content": error_msg},
-                            ]
-                        )
-                        click.echo(f"\nORII: {error_msg}\n")
-                        continue  # Skip LLM call
-
-                # Handle calendar-specific query and LLM
-                specific_calendar_id = None
-                calendar_match = re.search(
-                    r"(?:in|on|from)\s+(?:my\s+)?(?:the\s+)?([a-zA-Z0-9\s]+?)\s+calendar",
-                    user_input,
-                    re.IGNORECASE,
-                )
-                if calendar_match:
-                    calendar_name = calendar_match.group(1).strip()
-                    specific_calendar_id = extract_calendar_id(
-                        service, calendar_name, user_id
-                    )
-
-                # Basic time/date queries that don't need LLM
-                basic_time_patterns = [
-                    r"^\s*(?:what|tell me)?\s*(?:(?:is|about|current)\s+)?(?:the\s+)?(?:date|day|time)\s+(?:today|now|right now|is it)?\s*\??$",
-                    r"^\s*(?:what|which)\s+day\s+(?:of the week|is it today|is today)\s*\??$",
-                    r"^\s*(?:what|what's)\s+today\??$",
-                ]
-
-                is_basic_time_query = any(
-                    re.match(pattern, user_input.lower())
-                    for pattern in basic_time_patterns
+                # First try without search terms to get all events
+                events = get_events(
+                    is_past=is_past,
+                    days_range=days_range,
+                    search_terms=None,  # Don't use search terms for initial fetch
+                    reverse_chronological=reverse_chronological,
+                    include_all_calendars=include_all_calendars,
+                    specific_date=specific_date,
                 )
 
-                if is_basic_time_query:
-                    # Always provide accurate real-world time for direct time queries
-                    now = datetime.now()
-                    weekday = now.strftime("%A")
-                    date = now.strftime("%B %d, %Y")
-                    time_str = now.strftime("%I:%M %p")
+                # Pass the events and conversation to the LLM for a response
+                full_query = query
+                response = query_gpt(full_query, conversation, events, use_context=True)
 
-                    response = (
-                        f"Today is {weekday}, {date}. The current time is {time_str}."
-                    )
+            elif intent.get("intent_type") == "time_date":
+                # Reply with current date and time
+                current_time = datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
+                response = f"The current time is {current_time}."
 
-                    # Add to conversation history
-                    conversation_history.extend(
-                        [
-                            {"role": "user", "content": user_input},
-                            {"role": "assistant", "content": response},
-                        ]
-                    )
-
-                    click.echo(f"\nORII: {response}\n")
-                    continue  # Skip LLM call
-
-                # Check for test/mock data disclaimer needed
-                # This detects queries about specific dates that might not match real dates
-                date_related_query = any(
-                    term in user_input.lower()
-                    for term in [
-                        "today",
-                        "tomorrow",
-                        "yesterday",
-                        "next week",
-                        "last week",
-                        "monday",
-                        "tuesday",
-                        "wednesday",
-                        "thursday",
-                        "friday",
-                        "saturday",
-                        "sunday",
-                    ]
+            elif intent.get("intent_type") == "greeting":
+                response = (
+                    "Hello! I'm your calendar assistant. How can I help you today?"
                 )
 
-                try:
-                    # Start measuring response time with a different variable name
-                    query_start_time = time.time()
+            elif intent.get("intent_type") == "assistant_info":
+                response = (
+                    "I'm your calendar assistant. I can help you with viewing your calendar events, "
+                    "creating new events, and answering questions about your schedule. Just ask me "
+                    "about your upcoming events or any specific meetings you're interested in."
+                )
 
-                    # Parse time range to determine if we're looking in past or future
-                    is_past, days_range, reverse_chrono = parse_time_range(user_input)
+            elif intent.get("intent_type") == "calendar_list":
+                # Get calendar list
+                calendars = get_calendar_list(service)
+                if calendars:
+                    response = f"You have access to {len(calendars)} calendars:\n\n"
+                    for i, cal in enumerate(calendars, 1):
+                        primary = " (Primary)" if cal.get("primary", False) else ""
+                        selected = " [Selected]" if cal.get("selected", False) else ""
+                        response += f"{i}. {cal.get('summary')}{primary}{selected}\n"
+                else:
+                    response = "I couldn't find any calendars you have access to."
 
-                    # Get relevant events
-                    search_terms = None
-                    if "extract_search_terms" in globals():
-                        search_terms = extract_search_terms(user_input)
-                    events = get_events(
-                        is_past, days_range, search_terms, reverse_chrono
-                    )
+            else:
+                # This is our fallback case - use GPT to generate a response
+                full_query = query
+                response = query_gpt(full_query, conversation, use_context=False)
 
-                    # Generate response using LLM for general queries
-                    if specific_calendar_id:
-                        # Only search in the specified calendar - filter events by calendar ID
-                        filtered_events = [
-                            e
-                            for e in events
-                            if e.get("calendarId", "primary") == specific_calendar_id
-                        ]
-                        response = query_gpt(
-                            user_input,
-                            conversation_history,
-                            filtered_events,
-                            debug=False,
-                            use_context=True,
-                        )
-                    else:
-                        # Use all events
-                        response = query_gpt(
-                            user_input,
-                            conversation_history,
-                            events,
-                            debug=False,
-                            use_context=True,
-                        )
+            # Print the response to the user
+            print(f"\nOrii: {response}")
 
-                    # If using test data and query is date-related, append a note to the response
-                    if date_related_query:
-                        # Check if any event has date far in the future/past
-                        using_test_data = False
-                        future_date_threshold = datetime.now() + timedelta(days=365)
-                        # Ensure future_date_threshold has timezone info
-                        local_tz = datetime.now().astimezone().tzinfo
-                        if future_date_threshold.tzinfo is None:
-                            future_date_threshold = future_date_threshold.replace(
-                                tzinfo=local_tz
-                            )
+            # Update conversation history for context
+            conversation.append({"role": "user", "content": query})
+            conversation.append({"role": "assistant", "content": response})
 
-                        if events and len(events) > 0:
-                            for event in events[:5]:  # Check first few events
-                                if "parsed_start" in event:
-                                    event_date = event["parsed_start"]
+            # Limit conversation history to last 10 exchanges to prevent token overflow
+            if len(conversation) > 20:
+                conversation = conversation[-20:]
 
-                                    # Ensure event_date has timezone info for comparison
-                                    if event_date.tzinfo is None:
-                                        event_date = event_date.replace(tzinfo=local_tz)
-
-                                    try:
-                                        if event_date > future_date_threshold:
-                                            using_test_data = True
-                                            break
-                                    except TypeError:
-                                        # Skip this comparison if there's still an issue
-                                        continue
-
-                        if (
-                            using_test_data
-                            and "NOTE: This is test data" not in response
-                        ):
-                            response += "\n\nNOTE: This is test calendar data. Date references might not match the current real-world date."
-
-                    # Calculate response time using our renamed variable
-                    response_time = time.time() - query_start_time
-                    print(f"DEBUG - Total response time: {response_time} seconds")
-
-                    # Track response
-                    track_user_action(
-                        user_id=user_id,
-                        event_name="single_query_response",
-                        properties={
-                            "response_time": response_time,
-                            "response_length": len(response),
-                        },
-                    )
-
-                    # Update conversation history
-                    conversation_history.extend(
-                        [
-                            {"role": "user", "content": user_input},
-                            {"role": "assistant", "content": response},
-                        ]
-                    )
-
-                    # Keep conversation history manageable
-                    if len(conversation_history) > 10:
-                        conversation_history = conversation_history[-10:]
-
-                    click.echo(f"\nORII: {response}\n")
-                except Exception as e:
-                    # Track errors
-                    if user_id:
-                        track_user_action(
-                            user_id=user_id,
-                            event_name="query_error",
-                            properties={
-                                "error_type": str(type(e)),
-                                "error_message": str(e),
-                            },
-                        )
-                    click.echo(f"Error: {str(e)}")
-                    if hasattr(e, "content"):
-                        click.echo(f"Detailed error: {e.content}")
-
-                    # Try to give a more helpful error message for token limit errors
-                    if "too large" in str(e).lower() or "token" in str(e).lower():
-                        click.echo(
-                            "\nTry asking about a smaller date range or being more specific in your query."
-                        )
-                    # Try to provide a basic response for time/date questions even if API fails
-                    elif any(
-                        kw in user_input.lower()
-                        for kw in ["time", "date", "day", "today"]
-                    ):
-                        now = datetime.now()
-                        basic_response = f"Today is {now.strftime('%A, %B %d, %Y')}. The current time is {now.strftime('%I:%M %p')}."
-                        click.echo(f"\nORII: {basic_response}\n")
-
-                        # Add to conversation history
-                        conversation_history.extend(
-                            [
-                                {"role": "user", "content": user_input},
-                                {"role": "assistant", "content": basic_response},
-                            ]
-                        )
-            except (KeyboardInterrupt, EOFError):
-                print("\nSession interrupted. Goodbye! 👋")
-                break
-    except Exception as e:
-        print(f"Unexpected error: {str(e)}")
-        print("Please try again or restart the application.")
+        except Exception as e:
+            print(f"Unexpected error: {str(e)}")
+            print("Please try again or restart the application.")
 
 
 # Development mode configuration
@@ -1666,8 +2027,8 @@ def parse_event_creation_details(query):
     title_patterns = [
         r'(?:called|titled|named|for|about)\s+"([^"]+)"',
         r"(?:called|titled|named|for|about)\s+\'([^\']+)\'",
-        r"(?:called|titled|named|for|about)\s+([a-zA-Z0-9\s]+?)(?:\s+on|\s+at|\s+from|\s+\.|$)",
-        r"create\s+(?:an\s+)?event\s+(?:called\s+)?([a-zA-Z0-9\s]+?)(?:\s+on|\s+at|\s+from|\s+\.|$)",
+        r"(?:called|titled|named|for|about)\s+([a-zA-Z0-9\s]+?)(?:\s+on|\s+at|\s+\.|$)",
+        r"create\s+(?:an\s+)?event\s+(?:called\s+)?([a-zA-Z0-9\s]+?)(?:\s+on|\s+at|\s+\.|$)",
     ]
 
     for pattern in title_patterns:
@@ -2105,6 +2466,52 @@ def parse_natural_language_datetime(text, default_days=7, default_duration_hours
     return result
 
 
+def format_datetime_range(start_time, end_time, is_all_day=False):
+    """Format start and end times for an event in a readable format.
+
+    Args:
+        start_time: Start time string (ISO format)
+        end_time: End time string (ISO format)
+        is_all_day: Whether this is an all-day event
+
+    Returns:
+        Formatted string with the date/time range
+    """
+    if is_all_day:
+        # Parse dates and format all-day events
+        try:
+            start_date = datetime.fromisoformat(start_time)
+            end_date = datetime.fromisoformat(end_time)
+            # End date is exclusive in all-day events, so subtract a day for display
+            end_date = end_date - timedelta(days=1)
+
+            # Same day
+            if start_date.date() == end_date.date():
+                return f"{start_date.strftime('%Y-%m-%d')} (All day)"
+            else:
+                return f"{start_date.strftime('%Y-%m-%d')} - {end_date.strftime('%Y-%m-%d')} (All day)"
+        except (ValueError, TypeError):
+            return f"{start_time} - {end_time} (All day)"
+    else:
+        # Parse and format timed events
+        try:
+            start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+
+            # Convert to local time for display
+            local_tz = datetime.now().astimezone().tzinfo
+            start_local = start_dt.astimezone(local_tz)
+            end_local = end_dt.astimezone(local_tz)
+
+            # Same day
+            if start_local.date() == end_local.date():
+                return f"{start_local.strftime('%Y-%m-%d %I:%M %p')} - {end_local.strftime('%I:%M %p')}"
+            else:
+                return f"{start_local.strftime('%Y-%m-%d %I:%M %p')} - {end_local.strftime('%Y-%m-%d %I:%M %p')}"
+        except (ValueError, TypeError):
+            return f"{start_time} - {end_time}"
+
+
 @click.group()
 def cli():
     """ORII Calendar Assistant"""
@@ -2119,7 +2526,7 @@ def cli():
 )
 def chat(all_calendars):
     """Start chat mode"""
-    chat_mode(all_calendars)
+    chat_mode(include_all_calendars=all_calendars)
 
 
 @cli.command()
@@ -2170,14 +2577,22 @@ def test_delete(event_id):
 
 def test_llm(query: str, use_context: bool = False, debug: bool = False):
     """Test the LLM response."""
+    print(
+        f"[DEBUG] TEST_LLM - Processing query: '{query}', use_context={use_context}, debug={debug}"
+    )
+
     # Get current time in a formatted string for context
     current_time = datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
 
     # Parse time range from the query
-    is_past, days_range, reverse_chrono = parse_time_range(query)
+    is_past, days_range, reverse_chronological = parse_time_range(query)
+    print(
+        f"[DEBUG] TEST_LLM - Time range parsed: is_past={is_past}, days_range={days_range}, reverse_chronological={reverse_chronological}"
+    )
 
     # Extract search terms using more robust NLP
     search_terms = extract_search_terms(query)
+    print(f"[DEBUG] TEST_LLM - Search terms: {search_terms}")
 
     # Construct time range text based on direction and range
     if is_past:
@@ -2209,12 +2624,20 @@ def test_llm(query: str, use_context: bool = False, debug: bool = False):
         else:
             time_range_text = f"Events from now until {days_range} days in the future"
 
+    print(f"[DEBUG] TEST_LLM - Time range text: '{time_range_text}'")
+
     # Fetch events with appropriate ordering
-    events = get_events(is_past, days_range, search_terms, reverse_chrono)
+    print(
+        f"[DEBUG] TEST_LLM - About to fetch events with is_past={is_past}, days_range={days_range}, search_terms={search_terms}"
+    )
+    events = get_events(
+        is_past, days_range, search_terms, reverse_chronological=reverse_chronological
+    )
+    print(f"[DEBUG] TEST_LLM - Fetched {len(events)} events")
 
     # Additional context for reverse chronological searches
     ordering_context = ""
-    if reverse_chrono and is_past:
+    if reverse_chronological and is_past:
         ordering_context = " (showing most recent events first)"
 
     # Add current time context to the query
@@ -2222,234 +2645,512 @@ def test_llm(query: str, use_context: bool = False, debug: bool = False):
 
     if debug:
         print(
-            f"DEBUG:\nTime range: {time_range_text}\nIs past: {is_past}\nDays range: {days_range}\nReverse chrono: {reverse_chrono}\nSearch terms: {search_terms}\nEvent count: {len(events)}"
+            f"DEBUG:\nTime range: {time_range_text}\nIs past: {is_past}\nDays range: {days_range}\nReverse chronological: {reverse_chronological}\nSearch terms: {search_terms}\nEvent count: {len(events)}"
         )
 
+    print(f"[DEBUG] TEST_LLM - Calling query_gpt with use_context={use_context}")
     history = None
     answer = query_gpt(
         full_query, history, events, debug=debug, use_context=use_context
     )
+    print(f"[DEBUG] TEST_LLM - Got answer from query_gpt ({len(answer)} chars)")
     return answer
 
 
-def extract_search_terms(query):
-    """Extract meaningful search terms from user query using NLP techniques.
+@cli.command()
+@click.option(
+    "--llm-test",
+    is_flag=True,
+    help="Test LLM connection only",
+)
+def test(llm_test):
+    """Test chat mode with default settings"""
+    print("[DEBUG] Starting test command - chat mode with default settings")
+    try:
+        # Check Redis connection before starting chat
+        if redis_client is not None:
+            try:
+                redis_client.ping()
+                print("[DEBUG] Redis connection is working")
+            except Exception as redis_err:
+                print(f"[DEBUG] Redis connection error: {str(redis_err)}")
+                print("[DEBUG] Operating in no-cache mode")
 
-    Args:
-        query: User query text
+        # Test LLM connection if requested
+        if llm_test:
+            print("[DEBUG] Testing LLM connection...")
+            try:
+                test_response = query_gpt(
+                    "Please respond with 'LLM connection successful'",
+                    None,
+                    [],
+                    debug=True,
+                    use_context=False,
+                )
+                print(f"[DEBUG] LLM test response: {test_response}")
+                return
+            except Exception as llm_err:
+                print(f"[DEBUG] LLM connection error: {str(llm_err)}")
+                import traceback
 
-    Returns:
-        Search terms string for use in event filtering
-    """
-    # If no search indicators, return None
+                print("\n[DEBUG] LLM error traceback:")
+                print(traceback.format_exc())
+                return
+
+        # Check calendar service
+        try:
+            service = get_calendar_service()
+            print("[DEBUG] Calendar service initialized successfully")
+            # Verify service with a simple API call
+            try:
+                calendar_list = service.calendarList().list(maxResults=1).execute()
+                print("[DEBUG] Calendar API test request successful")
+            except Exception as cal_api_err:
+                print(f"[DEBUG] Calendar API test request failed: {str(cal_api_err)}")
+        except Exception as cal_err:
+            print(f"[DEBUG] Calendar service initialization error: {str(cal_err)}")
+
+        print("[DEBUG] Starting chat mode...")
+        chat_mode(include_all_calendars=True)
+    except Exception as e:
+        print(f"[DEBUG] Test command error: {str(e)}")
+        import traceback
+
+        print("\n[DEBUG] Full traceback:")
+        print(traceback.format_exc())
+
+
+def determine_query_intent(query):
+    """Determine the intent of a query to properly route it"""
+    print(f"[DEBUG] INTENT - Analyzing query: '{query}'")
+
+    # Normalize query
     query_lower = query.lower()
-    search_indicators = [
-        "search",
-        "find",
-        "show",
-        "about",
-        "related to",
-        "regarding",
-        "concerning",
-        "last",
-        "recent",
-        "latest",
-        "when",
-        "where",
-        "what time",
-    ]
 
-    if not any(indicator in query_lower for indicator in search_indicators):
-        return None
+    # Extract time range information
+    time_info = parse_time_range(query)
+    is_past = time_info.get("is_past", False)
+    days_range = time_info.get("days_range", 7)
+    reverse_chronological = time_info.get("reverse_chronological", False)
+    specific_date = time_info.get("specific_date", None)
 
-    # Define stop words to filter out
-    stop_words = set(
-        [
-            "a",
-            "an",
-            "the",
-            "in",
-            "on",
-            "at",
-            "to",
-            "for",
-            "with",
-            "about",
-            "from",
-            "by",
-            "after",
-            "before",
-            "between",
-            "during",
-            "under",
-            "over",
-            "my",
-            "our",
-            "your",
-            "when",
-            "where",
-            "why",
-            "how",
-            "what",
-            "which",
-            "who",
-            "was",
-            "is",
-            "are",
-            "did",
-            "have",
-            "had",
-            "has",
-            "do",
-            "does",
-            "last",
-            "recent",
-            "latest",
-            "time",
-            "show",
-            "me",
-            "tell",
-            "find",
-            "search",
-            "get",
-            "look",
-            "can",
-            "could",
-            "would",
-            "will",
-            "should",
-            "may",
-            "might",
-            "must",
-            "need",
-            "please",
-            "thanks",
+    # Special case for therapy session queries
+    if "therapy" in query_lower and any(
+        word in query_lower for word in ["last", "recent"]
+    ):
+        print(
+            "[DEBUG] INTENT - Detected therapy session search, extending time range and adding search terms"
+        )
+        is_past = True
+        days_range = 365  # Look back a full year
+        reverse_chronological = True
+        search_terms = ["therapy"]
+
+    # Extract search terms (if any) to help with filtering
+    if "search_terms" not in locals():
+        search_terms = extract_search_terms(query)
+
+    # Count event creation indicators
+    creation_indicators = sum(
+        1
+        for phrase in [
+            "schedule",
+            "create",
+            "add",
+            "new",
+            "make",
+            "set up",
+            "put on",
+            "book",
         ]
+        if phrase in query_lower
     )
 
-    # Identify potential key entities using NLP patterns
+    # Default response for calendar queries
+    intent = {
+        "intent_type": "calendar_query",
+        "is_past": is_past,
+        "days_range": days_range,
+        "needs_calendar_data": True,
+        "is_creation": False,
+        "reverse_chronological": reverse_chronological,
+    }
 
-    # Pattern 1: Look for entities after search indicators
-    entity_patterns = [
-        r"(?:about|regarding|concerning|on|for|related to)\s+([a-zA-Z0-9\s]+?)(?:\.|\?|$|in|on|at|with)",
-        r"(?:find|search for|show)\s+(?:my|the)?\s*([a-zA-Z0-9\s]+?)(?:\.|\?|$|in|on|at|with)",
-        r"(?:when|where|what time)(?:\s+\w+){0,3}\s+(?:my|the|our)?\s*([a-zA-Z0-9\s]+?)(?:\.|\?|$|in|on|at|with)",
-        r"(?:last|latest|recent|previous)(?:\s+\w+){0,2}\s+([a-zA-Z0-9\s]+?)(?:\.|\?|$|in|on|at|with)",
+    # 1. Check for event creation intent
+    if creation_indicators >= 1:
+        intent["intent_type"] = "event_creation"
+        intent["is_creation"] = True
+        intent["needs_calendar_data"] = (
+            False  # Don't need to fetch calendar data for creation
+        )
+        print("[DEBUG] INTENT - Classified as EVENT_CREATION")
+        return intent
+
+    # 2. Check for direct time/date queries
+    time_date_patterns = [
+        r"what (day|date|time) is (it|today)",
+        r"what is the (date|time)",
+        r"current (date|time)",
+    ]
+    if any(re.search(pattern, query_lower) for pattern in time_date_patterns):
+        intent["intent_type"] = "time_date"
+        intent["needs_calendar_data"] = False
+        print("[DEBUG] INTENT - Classified as TIME_DATE")
+        return intent
+
+    # 3. Check for event listing intent
+    list_indicators = [
+        "show",
+        "list",
+        "get",
+        "what",
+        "tell me",
+        "display",
+        "view",
+        "see",
+        "find",
+        "give me",
+    ]
+    event_plural_refs = [
+        "events",
+        "meetings",
+        "appointments",
+        "reservations",
+        "schedule",
+        "calendar",
+        "agenda",
     ]
 
-    extracted_entities = []
-    for pattern in entity_patterns:
-        matches = re.finditer(pattern, query_lower)
-        for match in matches:
-            entity = match.group(1).strip()
-            if (
-                entity
-                and len(entity) > 2
-                and not all(word in stop_words for word in entity.split())
-            ):
-                extracted_entities.append(entity)
-
-    # If we found explicit entities, use those
-    if extracted_entities:
-        # Get up to 3 key entities
-        key_entities = extracted_entities[:3]
-
-        # Create search terms for each entity
-        search_terms = []
-        for entity in key_entities:
-            # Check if it's a multi-word entity
-            if " " in entity and len(entity.split()) <= 3:
-                search_terms.append(f'"{entity}"')  # Quote multi-word entities
-            else:
-                # For longer entities, use individual words
-                words = [
-                    w for w in entity.split() if w not in stop_words and len(w) > 2
-                ]
-                search_terms.extend(words)
-
-        # Remove duplicates and join
-        unique_terms = list(set(search_terms))
-        if unique_terms:
-            return " OR ".join(unique_terms)
-
-    # Fallback: Process tokens and extract key terms if no explicit entities found
-    tokens = query_lower.split()
-    filtered_tokens = [
-        token for token in tokens if token not in stop_words and len(token) > 2
+    # Combined time + list patterns
+    time_list_patterns = [
+        r"what (do|does) (i|my) (have|has)",
+        r"what('s| is) (happening|going on)",
+        r"what('s| is) (in|on) (my|the) (calendar|schedule)",
+        r"what am i (doing|up to)",
+        r"how does my (day|schedule|calendar) look",
+        r"anything (happening|scheduled|planned)",
     ]
 
-    # Extract meaningful search terms (single words and up to 3-word phrases)
-    if filtered_tokens:
-        # For single words
-        single_words = filtered_tokens[:5]  # Limit to 5 keywords
+    # Count listing indicators
+    list_score = sum(1 for indicator in list_indicators if indicator in query_lower)
+    event_plural_score = sum(1 for ref in event_plural_refs if ref in query_lower)
+    time_list_score = sum(
+        1 for pattern in time_list_patterns if re.search(pattern, query_lower)
+    )
 
-        # Add 2-word phrases if available
-        two_word_phrases = []
-        for i in range(len(tokens) - 1):
-            phrase = f"{tokens[i]} {tokens[i+1]}"
-            words = phrase.split()
-            if not all(word in stop_words for word in words) and len(phrase) > 5:
-                two_word_phrases.append(f'"{phrase}"')
+    print(
+        f"[DEBUG] INTENT - List indicators: {list_score}, Event plural refs: {event_plural_score}, Time list patterns: {time_list_score}"
+    )
 
-        # Combine search terms
-        all_terms = single_words + two_word_phrases[:3]  # Limit phrases
+    # If we have a specific date or time phrase, and question words like "what", "how", etc., it's usually a listing
+    if specific_date and list_score >= 1:
+        print(
+            "[DEBUG] INTENT - Classified as LIST_EVENTS due to specific date + list indicators"
+        )
+        intent["intent_type"] = "calendar_query"
+        return intent
 
-        if all_terms:
-            return " OR ".join(all_terms)
+    # 4. Check for greetings and small talk
+    greetings = [
+        "hi",
+        "hello",
+        "hey",
+        "greetings",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "howdy",
+    ]
+    if any(
+        greeting == query_lower or greeting in query_lower.split()
+        for greeting in greetings
+    ):
+        intent["intent_type"] = "greeting"
+        intent["needs_calendar_data"] = False
+        print("[DEBUG] INTENT - Classified as GREETING")
+        return intent
 
-    return None
+    # 5. Check for questions about the assistant
+    assistant_patterns = [
+        r"who are you",
+        r"what('s| is) your name",
+        r"what can you do",
+        r"help me",
+        r"how do you work",
+        r"what are you",
+    ]
+    if any(re.search(pattern, query_lower) for pattern in assistant_patterns):
+        intent["intent_type"] = "assistant_info"
+        intent["needs_calendar_data"] = False
+        print("[DEBUG] INTENT - Classified as ASSISTANT_INFO")
+        return intent
+
+    # 6. Check for calendar list request
+    calendar_list_patterns = [
+        r"(list|show|what|which) calendars",
+        r"my calendars",
+        r"available calendars",
+        r"what calendars do i have",
+    ]
+    if any(re.search(pattern, query_lower) for pattern in calendar_list_patterns):
+        intent["intent_type"] = "calendar_list"
+        intent["needs_calendar_data"] = False
+        print("[DEBUG] INTENT - Classified as CALENDAR_LIST")
+        return intent
+
+    # 7. General calendar query (default fallback)
+    # For any other query that seems calendar related
+    print("[DEBUG] INTENT - Defaulting to CALENDAR_QUERY")
+    intent["intent_type"] = "calendar_query"
+    return intent
 
 
-# Development mode configuration
-DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
+def extract_search_terms(query):
+    """Extract search terms from a query to filter events by
+
+    Args:
+        query: Query string
+
+    Returns:
+        List of search terms
+    """
+    print(f"[DEBUG] EXTRACT_SEARCH - Analyzing query: '{query}'")
+
+    # Handle empty query
+    if not query:
+        print("[DEBUG] EXTRACT_SEARCH - Empty query, returning None")
+        return None
+
+    # Normalize query
+    query_lower = query.lower()
+
+    # Tokenize the query
+    query_tokens = re.findall(r"\b\w+\b", query_lower)
+    print(f"[DEBUG] EXTRACT_SEARCH - Tokens: {query_tokens}")
+
+    # List of words to ignore in search terms
+    ignore_words = [
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "shall",
+        "should",
+        "may",
+        "might",
+        "must",
+        "can",
+        "could",
+        "about",
+        "for",
+        "from",
+        "in",
+        "of",
+        "on",
+        "to",
+        "with",
+        "what",
+        "when",
+        "where",
+        "who",
+        "why",
+        "how",
+        "which",
+        "calendar",
+        "event",
+        "events",
+        "meeting",
+        "meetings",
+        "appointment",
+        "appointments",
+        "schedule",
+        "scheduled",
+        "show",
+        "tell",
+        "find",
+        "search",
+        "look",
+        "get",
+        "happening",
+        "today",
+        "tomorrow",
+        "yesterday",
+        "week",
+        "month",
+        "year",
+        "morning",
+        "afternoon",
+        "evening",
+        "night",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+        "next",
+        "last",
+        "this",
+        "upcoming",
+        "recent",
+        "latest",
+        "previous",
+        "past",
+        "future",
+        "coming",
+        "every",
+        "all",
+        "any",
+        "some",
+        "most",
+        "few",
+        "little",
+        "much",
+        "many",
+        "more",
+        "less",
+        "attend",
+        "attending",
+        "attended",
+        "go",
+        "going",
+        "gone",
+        "went",
+        "come",
+        "coming",
+        "came",
+        "my",
+        "your",
+        "our",
+        "their",
+        "his",
+        "her",
+        "its",
+        "their",
+        "i",
+        "you",
+        "we",
+        "they",
+        "he",
+        "she",
+        "it",
+        "me",
+        "him",
+        "us",
+        "them",
+        "am",
+        "is",
+        "are",
+        "was",
+        "were",
+        "any",
+        "some",
+        "please",
+        "thanks",
+        "thank",
+        "you",
+        # Additional time-related words to ignore
+        "time",
+        "date",
+        "day",
+        "hour",
+        "minute",
+        "second",
+        "o'clock",
+        "pm",
+        "am",
+        # Question words and variants
+        "what's",
+        "when's",
+        "where's",
+        "who's",
+        "how's",
+        "why's",
+    ]
+
+    # Find key terms to search for
+    search_terms = []
+    for word in query_tokens:
+        if (
+            word not in ignore_words
+            and len(word) > 1  # Skip single-character words
+            and not word.isdigit()  # Skip pure numbers
+            and not re.match(r"\d+:\d+", word)  # Skip time patterns like "3:30"
+        ):
+            search_terms.append(word)
+
+    print(f"[DEBUG] EXTRACT_SEARCH - Extracted search terms: {search_terms}")
+
+    if not search_terms:
+        print("[DEBUG] EXTRACT_SEARCH - No useful search terms found, returning None")
+        return None
+
+    return search_terms
+
+
+# Add this function right before "if __name__ == "__main__":"
+def list_available_calendars():
+    """Debug function to list all available calendars and details"""
+    print("[DEBUG] Listing all available calendars...")
+
+    try:
+        service = get_calendar_service()
+        calendars = get_calendar_list(service)
+
+        if not calendars:
+            print("[ERROR] No calendars found or accessible!")
+            return
+
+        print(f"Found {len(calendars)} calendars:")
+        for i, cal in enumerate(calendars):
+            primary = " (PRIMARY)" if cal.get("primary", False) else ""
+            selected = (
+                " [SELECTED]" if cal.get("selected", False) else " [NOT SELECTED]"
+            )
+            print(f"{i+1}. {cal.get('summary')}{primary}{selected}")
+            print(f"   - ID: {cal.get('id')}")
+            print(f"   - Access Role: {cal.get('accessRole', 'unknown')}")
+    except Exception as e:
+        print(f"[ERROR] Failed to list calendars: {str(e)}")
+        if hasattr(e, "content"):
+            print(f"[ERROR] API error details: {e.content}")
 
 
 @cli.command()
-def test():
-    """Test LLM responses with real calendar data"""
-    try:
-        conversation_history = []
-
-        while True:
-            try:
-                query = click.prompt("Test query")
-                if query.lower() in ["exit", "quit", "bye"]:
-                    break
-
-                # Check for debug flag
-                debug_mode = False
-                if query.startswith("debug:"):
-                    debug_mode = True
-                    query = query[6:].strip()
-
-                # Process the query through our updated test_llm function
-                response = test_llm(query, use_context=True, debug=debug_mode)
-
-                # Add to conversation history
-                conversation_history.extend(
-                    [
-                        {"role": "user", "content": query},
-                        {"role": "assistant", "content": response},
-                    ]
-                )
-
-                # Keep conversation history manageable
-                if len(conversation_history) > 10:
-                    conversation_history = conversation_history[-10:]
-
-                click.echo(f"\nORII: {response}\n")
-            except (KeyboardInterrupt, EOFError):
-                break
-            except Exception as e:
-                print(f"Error: {str(e)}")
-                if hasattr(e, "content"):
-                    print(f"Detailed error: {e.content}")
-
-    except Exception as e:
-        click.echo(f"Error: {str(e)}")
-        if hasattr(e, "content"):
-            click.echo(f"Detailed error: {e.content}")
+def calendars():
+    """List all available calendars for debugging"""
+    list_available_calendars()
 
 
 if __name__ == "__main__":
+    # Set CLI mode environment variable
+    os.environ["CLI_MODE"] = "true"
+    # Run the CLI application
     cli()
