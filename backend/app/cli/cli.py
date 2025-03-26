@@ -1,3 +1,6 @@
+# This is the main CLI implementation file that contains all the command handling logic
+# it is responsible for parsing the command line arguments, initializing the services, and handling the commands
+#
 """
 CLI interface for the application.
 """
@@ -11,6 +14,7 @@ from .cache import Cache
 from .commands import CommandHandlers
 from .llm_service import LLMService
 from .metrics import Metrics
+from .time_utils import format_datetime_range
 
 
 def create_parser() -> argparse.ArgumentParser:

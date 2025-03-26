@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# this is the entry point that users will run directly
+# backend/app/cli/cli.py is the actual CLI command group, containing the actual implementation
 """
 ORII Calendar Assistant CLI runner script
 """

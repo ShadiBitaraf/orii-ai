@@ -40,3 +40,4 @@ htmlcov/
 
 # Logs
 *.logbackend/test.db
+backend/test.db
