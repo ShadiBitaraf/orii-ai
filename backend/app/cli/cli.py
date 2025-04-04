@@ -9,12 +9,12 @@ import argparse
 import sys
 from typing import List, Optional
 
-from .calendar_service import CalendarService
-from .cache import Cache
+from .calendar_service import get_calendar_service
+from .cache import get_cached_data, set_cached_data, clear_cache
 from .commands import CommandHandlers
 from .llm_service import LLMService
 from .metrics import Metrics
-from .time_utils import format_datetime_range
+from .time_manager import format_datetime_range
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -207,11 +207,13 @@ def main(args: Optional[List[str]] = None) -> int:
 
     try:
         # Initialize services
-        calendar_service = CalendarService()
-        cache = Cache()
+        calendar_service = get_calendar_service()
         metrics = Metrics()
-        llm_service = LLMService(cache, metrics)
-        handlers = CommandHandlers(calendar_service, llm_service, cache, metrics)
+        llm_service = LLMService(metrics)
+        handlers = CommandHandlers(
+            llm_service=llm_service,
+            metrics=metrics,
+        )
 
         # Handle commands
         if parsed_args.command == "search":

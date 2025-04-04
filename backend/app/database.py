@@ -9,14 +9,12 @@ Handles core database functionality:
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
-import os
-from dotenv import load_dotenv
+from app.core.config import get_settings
 
-load_dotenv()
+settings = get_settings()
 
-SQLALCHEMY_DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://orii_user:password@localhost/orii_db"
-)
+# Get the database URL from settings
+SQLALCHEMY_DATABASE_URL = settings.get_database_url()
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

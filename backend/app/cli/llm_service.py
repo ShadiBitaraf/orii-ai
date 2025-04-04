@@ -5,23 +5,52 @@ LLM service functionality for the CLI application.
 import json
 from typing import Any, Dict, List, Optional, Union
 from datetime import datetime
+import os
+import logging
 
-from .cache import Cache
+from .cache import get_cached_data, set_cached_data, CacheKeyBuilder
 from .metrics import Metrics
+
+# Import OpenAI
+try:
+    import openai
+    from openai import OpenAI
+
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 
 class LLMService:
     """Service class for interacting with LLM models."""
 
-    def __init__(self, cache: Cache, metrics: Metrics):
+    def __init__(self, metrics: Metrics):
         """Initialize the LLM service.
 
         Args:
-            cache: Cache instance for storing LLM responses
             metrics: Metrics instance for recording LLM usage
         """
-        self.cache = cache
         self.metrics = metrics
+
+        # Initialize OpenAI client if available
+        self.client = None
+        if OPENAI_AVAILABLE:
+            try:
+                api_key = os.environ.get("OPENAI_API_KEY")
+                if api_key:
+                    self.client = OpenAI(api_key=api_key)
+                else:
+                    logger.warning(
+                        "OpenAI API key not found. LLM functionality will be limited."
+                    )
+            except Exception as e:
+                logger.error(f"Failed to initialize OpenAI client: {e}")
+        else:
+            logger.warning(
+                "OpenAI package not installed. LLM functionality will be limited."
+            )
 
     def _generate_cache_key(
         self,
@@ -41,14 +70,7 @@ class LLMService:
         Returns:
             Cache key string
         """
-        key_parts = [
-            "llm",
-            model,
-            str(temperature),
-            str(max_tokens),
-            prompt,
-        ]
-        return ":".join(key_parts)
+        return CacheKeyBuilder.llm_response_key(prompt, model)
 
     def _parse_response(
         self,
@@ -116,7 +138,7 @@ class LLMService:
         )
 
         # Try to get from cache first
-        cached_response = self.cache.get(cache_key)
+        cached_response = get_cached_data(cache_key)
         if cached_response is not None:
             self.metrics.record_cache_access("llm", hit=True)
             return self._parse_response(cached_response, expected_type)
@@ -124,19 +146,40 @@ class LLMService:
         self.metrics.record_cache_access("llm", hit=False)
 
         try:
-            # TODO: Implement actual LLM call here
-            # This is a placeholder that should be replaced with the actual LLM API call
-            response = "Placeholder response"
+            # Actual LLM call implementation
+            if not self.client:
+                logger.warning("OpenAI client not available. Using fallback response.")
+                response = f"Fallback response for: {prompt[:30]}..."
+            else:
+                # Call OpenAI API
+                chat_completion = self.client.chat.completions.create(
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+
+                # Extract the response text
+                response = chat_completion.choices[0].message.content
+
+                # Record token usage if available
+                if hasattr(chat_completion, "usage") and chat_completion.usage:
+                    total_tokens = chat_completion.usage.total_tokens
+                    self.metrics.record_llm_tokens("generate", total_tokens)
+                else:
+                    # Fallback if token count not available
+                    self.metrics.record_llm_tokens("generate", len(response.split()))
 
             # Cache the response
-            self.cache.set(cache_key, response, ttl=cache_ttl)
-
-            # Record metrics
-            self.metrics.record_llm_tokens("generate", len(response.split()))
+            set_cached_data(cache_key, response, expiration=cache_ttl)
 
             return self._parse_response(response, expected_type)
         except Exception as e:
             self.metrics.record_llm_error("generation_error")
+            logger.error(f"Error generating LLM response: {e}")
             raise
 
     def generate_batch(

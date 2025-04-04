@@ -20,14 +20,10 @@ from app.utils.security import (
 )
 from app.api import calendar
 from app.core.config import get_settings
+from app.utils.logger import setup_logger
 
-# Configure comprehensive logging (commented out for debugging purposes)
-# logging.basicConfig(
-#     level=logging.DEBUG,
-#     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-#     stream=sys.stdout,
-# )
-# logger = logging.getLogger(__name__)
+# Setup logger for this module
+logger = setup_logger("app.main")
 
 # Get settings (settings are fetched for environment-specific configuration)
 settings = get_settings()
@@ -63,33 +59,12 @@ app.add_middleware(
 #     return response
 
 
-# Print debug info on startup (commented out for debugging purposes)
-# @app.on_event("startup")
-# async def startup_event():
-#     logger.info("Starting ORII Calendar Assistant")
-#     logger.info(f"Environment: {settings.ENV}")
-#     logger.info("Registered routes:")
-#     route_groups = {}
-#     for route in app.routes:
-#         if hasattr(route, "tags"):
-#             tag = route.tags[0] if route.tags else "untagged"
-#         else:
-#             tag = "untagged"
-#         if tag not in route_groups:
-#             route_groups[tag] = []
-#         route_info = {
-#             "path": route.path,
-#             "methods": list(route.methods) if hasattr(route, "methods") else ["ANY"],
-#             "name": route.name if hasattr(route, "name") else None,
-#             "endpoint": route.endpoint.__name__ if hasattr(route, "endpoint") else None,
-#         }
-#         route_groups[tag].append(route_info)
-#     for tag, routes in route_groups.items():
-#         logger.info(f"\n{tag.upper()} Routes:")
-#         for route in routes:
-#             logger.info(f"  {', '.join(route['methods'])} {route['path']}")
-#             if route["endpoint"]:
-#                 logger.info(f"    → {route['endpoint']}")
+@app.on_event("startup")
+async def startup_event():
+    """Log info on startup"""
+    logger.info("Starting ORII Calendar Assistant")
+    logger.info(f"Environment: {settings.ENV}")
+    logger.info(f"Database URL: {settings.DATABASE_URL}")
 
 
 # Add test routes for debugging (commented out for debugging purposes)
@@ -108,13 +83,13 @@ app.add_middleware(
 
 
 # Include the calendar router (handles the calendar-related routes)
-# logger.info("Registering calendar routes...")
+logger.info("Registering calendar routes...")
 app.include_router(
     calendar.router,
     prefix="",  # No prefix needed as routes include /api
     tags=["calendar"],
 )
-# logger.info("Calendar routes registered")
+logger.info("Calendar routes registered")
 
 
 # User management endpoints

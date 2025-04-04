@@ -4,13 +4,18 @@ CLI command handlers for the application.
 
 import time
 from typing import Any, Dict, List, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
-from .calendar_service import CalendarService
-from .cache import Cache
+from .calendar_service import (
+    get_calendar_service,
+    get_events,
+    get_event,
+    get_calendar_timezone,
+)
+from .cache import get_cached_data, set_cached_data, delete_cached_data
 from .llm_service import LLMService
 from .metrics import Metrics
-from .time_utils import (
+from .time_manager import (
     parse_time_range,
     parse_natural_language_datetime,
     format_datetime_range,
@@ -22,22 +27,19 @@ class CommandHandlers:
 
     def __init__(
         self,
-        calendar_service: CalendarService,
         llm_service: LLMService,
-        cache: Cache,
         metrics: Metrics,
+        credentials_dict=None,
     ):
         """Initialize the command handlers.
 
         Args:
-            calendar_service: Calendar service instance
             llm_service: LLM service instance
-            cache: Cache instance
             metrics: Metrics instance
+            credentials_dict: Optional dictionary with Google credentials
         """
-        self.calendar_service = calendar_service
+        self.calendar_service = get_calendar_service(credentials_dict)
         self.llm_service = llm_service
-        self.cache = cache
         self.metrics = metrics
 
     def handle_search_events(
@@ -80,11 +82,12 @@ class CommandHandlers:
                     time_min = now
                     time_max = now + timedelta(days=days_range)
 
-            events = self.calendar_service.get_events(
+            events = get_events(
+                self.calendar_service,
                 time_min=time_min,
                 time_max=time_max,
                 max_results=max_results,
-                order_by="startTime" if not reverse_chronological else "startTime",
+                orderby="startTime" if not reverse_chronological else "startTime",
             )
 
             # Filter events based on query
@@ -287,11 +290,11 @@ class CommandHandlers:
             event_id: ID of the event to get details for
 
         Returns:
-            Event details or None if event not found
+            Event dictionary or None if event was not found
         """
         start_time = time.time()
         try:
-            event = self.calendar_service.get_event_details(event_id)
+            event = get_event(self.calendar_service, event_id)
 
             # Record metrics
             self.metrics.record_request(
@@ -323,8 +326,16 @@ class CommandHandlers:
         """
         start_time = time.time()
         try:
-            events = self.calendar_service.get_upcoming_events(
-                days_ahead=days_ahead,
+            # Calculate time range
+            now = datetime.now(timezone.utc)
+            time_min = now.isoformat()
+            time_max = (now + timedelta(days=days_ahead)).isoformat()
+
+            # Get events
+            events = get_events(
+                self.calendar_service,
+                time_min=time_min,
+                time_max=time_max,
                 max_results=max_results,
             )
 
@@ -356,9 +367,18 @@ class CommandHandlers:
         """
         start_time = time.time()
         try:
-            events = self.calendar_service.get_past_events(
-                days_back=days_back,
+            # Calculate time range
+            now = datetime.now(timezone.utc)
+            time_max = now.isoformat()
+            time_min = (now - timedelta(days=days_back)).isoformat()
+
+            # Get events
+            events = get_events(
+                self.calendar_service,
+                time_min=time_min,
+                time_max=time_max,
                 max_results=max_results,
+                orderby="startTime desc",
             )
 
             # Record metrics
@@ -383,7 +403,10 @@ class CommandHandlers:
         """
         start_time = time.time()
         try:
-            success = self.cache.clear()
+            from .cache import clear_cache, get_cache_stats
+
+            clear_cache()  # This function doesn't return a value in the new implementation
+            success = True
 
             # Record metrics
             self.metrics.record_request(
@@ -409,10 +432,9 @@ class CommandHandlers:
         """
         start_time = time.time()
         try:
-            stats = {
-                "size_bytes": self.cache.get_size(),
-                "keys": len(self.cache.get_keys()),
-            }
+            from .cache import get_cache_stats
+
+            stats = get_cache_stats()
 
             # Record metrics
             self.metrics.record_request(

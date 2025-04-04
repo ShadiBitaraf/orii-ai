@@ -1,0 +1,25 @@
+{
+  "operations": {
+    "query": {
+      "count": 9,
+      "success_count": 0,
+      "error_count": 9,
+      "total_duration": 0,
+      "avg_duration": 0,
+      "errors": {}
+    },
+    "process_query": {
+      "count": 9,
+      "success_count": 0,
+      "error_count": 9,
+      "total_duration": 45.64137291908264,
+      "avg_duration": 5.071263657675849,
+      "errors": {}
+    }
+  },
+  "total_requests": 18,
+  "successful_requests": 0,
+  "failed_requests": 18,
+  "first_used": "2025-04-03T16:35:18.819780",
+  "last_used": "2025-04-03T17:17:20.726565"
+}

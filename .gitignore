@@ -38,6 +38,9 @@ ENV/
 htmlcov/
 .pytest_cache/
 
-# Logs
-*.logbackend/test.db
+# Database
+*.db
 backend/test.db
+
+# Logs
+*.log

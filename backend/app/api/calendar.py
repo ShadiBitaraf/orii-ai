@@ -11,12 +11,11 @@ from app.utils.security import get_current_user
 from app.models.user import User
 from datetime import datetime, timedelta, timezone
 from app.core.config import get_settings
-import logging
+from app.utils.logger import setup_logger
 
 # Initialize settings and logging
 settings = get_settings()
-# logging.basicConfig(level=logging.DEBUG)
-# logger = logging.getLogger(__name__)
+logger = setup_logger("app.api.calendar")
 
 # Create router with explicit tags and prefix
 router = APIRouter(
@@ -52,7 +51,7 @@ def create_flow(redirect_uri: str) -> Flow:
         )
         return flow
     except Exception as e:
-        # logger.error(f"Error creating flow: {str(e)}")
+        logger.error(f"Error creating flow: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to initialize OAuth flow",
@@ -71,12 +70,10 @@ async def google_auth(
     OAuth consent screen where they can grant access to their Google Calendar.
     The state is stored in the database for security purposes.
     """
-    # logger.debug(f"google_auth endpoint called by user {current_user.id}")
+    logger.debug(f"google_auth endpoint called by user {current_user.id}")
     try:
-        # Get base URL and create flow
-        base_url = str(request.base_url).rstrip("/")
-        callback_url = f"{base_url}/api/oauth/callback"
-        flow = create_flow(callback_url)
+        # Create flow using the redirect URI from settings
+        flow = create_flow(settings.REDIRECT_URI)
 
         # Get authorization URL and state
         authorization_url, state = flow.authorization_url(
@@ -92,13 +89,13 @@ async def google_auth(
         db.add(oauth_state)
         db.commit()
 
-        # logger.debug(f"Redirecting to: {authorization_url}")
+        logger.debug(f"Redirecting to: {authorization_url}")
         return RedirectResponse(
             authorization_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT
         )
 
     except Exception as e:
-        # logger.error(f"Error in google_auth: {str(e)}")
+        logger.error(f"Error in google_auth: {str(e)}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
@@ -114,7 +111,7 @@ async def oauth_callback(
     This endpoint is called after the user has authorized the application. It
     exchanges the authorization code for an access token and stores the credentials.
     """
-    # logger.debug(f"oauth_callback called for user {current_user.id}")
+    logger.debug(f"oauth_callback called for user {current_user.id}")
 
     # Verify state
     stored_state = (
@@ -168,7 +165,7 @@ async def oauth_callback(
         return {"message": "Successfully authenticated with Google Calendar"}
 
     except Exception as e:
-        # logger.error(f"Error in oauth_callback: {str(e)}")
+        logger.error(f"Error in oauth_callback: {str(e)}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
@@ -185,7 +182,7 @@ async def list_events(
     The user must have previously authenticated with Google and provided access
     to their Google Calendar. Optionally, a date range can be specified.
     """
-    # logger.debug(f"list_events called for user {current_user.id}")
+    logger.debug(f"list_events called for user {current_user.id}")
 
     try:
         # Get credentials
@@ -236,5 +233,5 @@ async def list_events(
         return events_result.get("items", [])
 
     except Exception as e:
-        # logger.error(f"Error in list_events: {str(e)}")
+        logger.error(f"Error in list_events: {str(e)}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
