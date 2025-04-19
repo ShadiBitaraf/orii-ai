@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     ENV: str = "development"
     HOST: str = "localhost"
     PORT: int = 8000
-
+    DEV_MODE: str = "true"
     # Google OAuth
     GOOGLE_CLIENT_ID: str
     GOOGLE_CLIENT_SECRET: str
@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # Authentication
     JWT_SECRET: str  # For user sessions with ORII
     SECRET_KEY: str  # For initial Google Calendar auth
+
+    # Monitoring - Add these fields
+    REDIS_URL: str = "redis://localhost:6379"
+    PROMETHEUS_PORT: str = "9090"
 
     class Config:
         env_file = ".env"

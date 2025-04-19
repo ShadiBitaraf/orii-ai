@@ -9,10 +9,19 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional, Union
 import json
 
-import google.oauth2.credentials
-import google_auth_oauthlib.flow
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+# Try to import Google API libraries, but provide fallbacks if not available
+try:
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    from google.auth.transport.requests import Request
+    from googleapiclient.discovery import build
+    from googleapiclient.errors import HttpError
+
+    GOOGLE_APIS_AVAILABLE = True
+except ImportError:
+    GOOGLE_APIS_AVAILABLE = False
+
+# Remove mock service imports
 
 from .cache import get_cached_data, set_cached_data
 from .monitoring import record_calendar_request
@@ -33,43 +42,83 @@ CALENDAR_CACHE = {}
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 
-def get_calendar_service(credentials_dict=None):
-    """
-    Get a Google Calendar API service instance.
-
-    Args:
-        credentials_dict: Optional dictionary with credentials
+def get_calendar_service() -> Any:
+    """Get or refresh Google Calendar API credentials and return service.
 
     Returns:
-        Google Calendar service instance
+        Google Calendar service object or None if not available
     """
-    start_time_perf = time.time()
-    try:
-        if credentials_dict:
-            credentials = (
-                google.oauth2.credentials.Credentials.from_authorized_user_info(
-                    credentials_dict
-                )
-            )
-        else:
-            # Use local credentials file (for development/testing)
-            flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(
-                "credentials.json", SCOPES
-            )
-            credentials = flow.run_local_server(port=0)
+    # Only use real service, no mock fallback
+    if GOOGLE_APIS_AVAILABLE:
+        try:
+            # First check if we need to create credentials.json from environment variables
+            if (
+                not os.path.exists("credentials.json")
+                and os.environ.get("GOOGLE_CLIENT_ID")
+                and os.environ.get("GOOGLE_CLIENT_SECRET")
+            ):
+                logger.info("Creating credentials.json from environment variables")
+                client_config = {
+                    "installed": {
+                        "client_id": os.environ.get("GOOGLE_CLIENT_ID"),
+                        "client_secret": os.environ.get("GOOGLE_CLIENT_SECRET"),
+                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                        "redirect_uris": [
+                            "urn:ietf:wg:oauth:2.0:oob",
+                            "http://localhost",
+                        ],
+                    }
+                }
 
-        service = build("calendar", "v3", credentials=credentials)
+                # Write the credentials.json file
+                with open("credentials.json", "w") as f:
+                    json.dump(client_config, f)
+                logger.info("Successfully created credentials.json file")
 
-        # Record performance
-        duration = time.time() - start_time_perf
-        record_calendar_request("get_service", True, None, duration)
-        return service
-    except Exception as e:
-        # Record error
-        duration = time.time() - start_time_perf
-        record_calendar_request("get_service", False, str(e), duration)
-        logger.error(f"Error getting calendar service: {e}")
-        raise
+            creds = None
+            # The file token.json stores the user's access and refresh tokens, and is
+            # created automatically when the authorization flow completes for the first time.
+            if os.path.exists("token.json"):
+                creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+
+            # If there are no (valid) credentials available, let the user log in.
+            if not creds or not creds.valid:
+                if creds and creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
+                elif os.path.exists("credentials.json"):
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        "credentials.json", SCOPES
+                    )
+                    creds = flow.run_local_server(port=0)
+                else:
+                    logger.warning(
+                        "No credentials.json found. Cannot authenticate with Google Calendar."
+                    )
+                    raise FileNotFoundError("credentials.json not found")
+
+                # Save the credentials for the next run
+                with open("token.json", "w") as token:
+                    token.write(creds.to_json())
+
+            # Return the calendar service
+            service = build("calendar", "v3", credentials=creds)
+            logger.info(
+                "Successfully created real Google Calendar service with iCalendar protocol support"
+            )
+            return service
+
+        except Exception as e:
+            logger.error(f"Error creating real calendar service: {str(e)}")
+            # No fallback to mock service
+            raise Exception(f"Cannot initialize calendar service: {str(e)}")
+
+    # If Google APIs aren't available, raise exception - no mock fallback
+    logger.error("Google APIs not available and mock services disabled")
+    raise ImportError(
+        "Google Calendar API libraries not available and mock services are disabled"
+    )
 
 
 def get_calendar_timezone(service, calendar_id="primary"):
@@ -119,23 +168,17 @@ def get_calendar_list(service):
     Returns:
         List of calendar dictionaries
     """
-    # Check cache first to avoid API call
-    cache_key = "calendar_list"
-    cached_list = get_cached_data(cache_key)
-    if cached_list:
-        return cached_list
-
     start_time_perf = time.time()
     try:
+        # Always get fresh data from the API to avoid issues
         calendar_list = service.calendarList().list().execute()
         calendars = calendar_list.get("items", [])
-
-        # Cache the calendar list
-        set_cached_data(cache_key, calendars, expiration=3600)  # Cache for 1 hour
 
         # Record performance
         duration = time.time() - start_time_perf
         record_calendar_request("get_calendars", True, None, duration)
+
+        logger.info(f"Retrieved {len(calendars)} calendars from Google Calendar API")
         return calendars
     except Exception as e:
         # Record error
@@ -148,6 +191,7 @@ def get_calendar_list(service):
 def get_selected_calendars(service, calendar_ids=None):
     """
     Get selected calendars or all calendars if none specified.
+    Only returns calendars that are visible (not hidden) in the user's Google Calendar.
 
     Args:
         service: Google Calendar service
@@ -156,12 +200,36 @@ def get_selected_calendars(service, calendar_ids=None):
     Returns:
         List of calendar dictionaries
     """
+    # Get fresh calendar list directly from the API
     all_calendars = get_calendar_list(service)
 
-    if not calendar_ids:
-        return all_calendars
+    # Filter out hidden calendars - in Google Calendar API,
+    # calendars have a "selected" property which indicates if they're visible
+    visible_calendars = [
+        cal
+        for cal in all_calendars
+        if cal.get("selected", True) and not cal.get("hidden", False)
+    ]
 
-    return [cal for cal in all_calendars if cal.get("id") in calendar_ids]
+    logger.info(
+        f"Found {len(visible_calendars)} visible calendars out of {len(all_calendars)} total calendars"
+    )
+
+    for cal in visible_calendars:
+        display_name = cal.get("summaryOverride", cal.get("summary", "Unnamed"))
+        logger.info(f"Visible calendar: {display_name} (ID: {cal.get('id')})")
+
+    # If specific calendar IDs are requested, filter the visible calendars further
+    if calendar_ids:
+        filtered_calendars = [
+            cal for cal in visible_calendars if cal.get("id") in calendar_ids
+        ]
+        logger.info(
+            f"Filtered to {len(filtered_calendars)} calendars based on requested IDs"
+        )
+        return filtered_calendars
+
+    return visible_calendars
 
 
 def get_events(
@@ -475,3 +543,43 @@ def import_events_from_ics(service, ics_file, calendar_id="primary"):
             "errors": 1,
             "error_details": [{"event": "File processing", "error": str(e)}],
         }
+
+
+def get_visible_calendars():
+    """Helper function to get visible and selected calendars.
+
+    Returns:
+        List of formatted calendar information dictionaries.
+    """
+    try:
+        service = get_calendar_service()
+        if not service:
+            logger.error("Failed to get calendar service")
+            return []
+
+        selected_calendars = get_selected_calendars(service)
+        if not selected_calendars:
+            logger.debug("No selected calendars found")
+            return []
+
+        # Format for display
+        formatted_calendars = []
+        for cal in selected_calendars:
+            # Use summaryOverride if available, otherwise fall back to summary
+            display_name = cal.get("summaryOverride", cal.get("summary", "Unnamed"))
+            primary_marker = " (primary)" if cal.get("primary", False) else ""
+
+            formatted_calendars.append(
+                {
+                    "summary": display_name + primary_marker,
+                    "id": cal.get("id", ""),
+                    "color": cal.get("backgroundColor", "#000000"),
+                    "primary": cal.get("primary", False),
+                }
+            )
+
+        logger.debug(f"Found {len(formatted_calendars)} visible calendars")
+        return formatted_calendars
+    except Exception as e:
+        logger.error(f"Error getting visible calendars: {e}")
+        return []

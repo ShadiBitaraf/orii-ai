@@ -209,128 +209,88 @@ def delete_event(service, event_id, calendar_id="primary"):
         return False
 
 
-def format_event_text(event: Dict[str, Any]) -> str:
-    """Format an event as human-readable text.
+def format_event_text(event):
+    """Format an event for text display.
 
     Args:
-        event: Event dictionary (Google Calendar format)
+        event: Event dictionary
 
     Returns:
-        Formatted event text
+        Formatted event string
     """
-    # Convert Google event to our standard dictionary
-    if "kind" in event and event.get("kind") == "calendar#event":
-        event_dict = google_event_to_dict(event)
-    else:
-        # Assume it's already in our format
-        event_dict = event
+    # Skip events with empty titles (likely artifacts or hidden events)
+    if not event.get("summary") and not event.get("title"):
+        return None
 
-    # Format the event details for display
-    lines = []
+    # Handle Google Calendar API format
+    if "summary" in event:
+        title = event.get("summary", "Untitled Event")
 
-    # Title/summary
-    lines.append(f"📅 {event_dict.get('summary', 'Untitled Event')}")
+        # Skip events with title "Untitled Event"
+        if title == "Untitled Event":
+            return None
 
-    # Date and time
-    is_all_day = event_dict.get("is_all_day", False)
+        # Get start/end times
+        start = event.get("start", {})
+        end = event.get("end", {})
 
-    if is_all_day:
-        # All-day event
-        start_date = event_dict.get("start_date")
-        end_date = event_dict.get("end_date")
+        # Format date/time
+        start_time = ""
+        end_time = ""
 
-        if start_date == end_date or end_date is None:
-            # Single day
-            date_str = start_date.strftime("%A, %B %d, %Y")
-            lines.append(f"🕒 All day on {date_str}")
+        if "dateTime" in start:
+            start_dt = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00"))
+            start_time = start_dt.strftime("%I:%M %p")
+        elif "date" in start:
+            start_time = "all day"
+
+        if "dateTime" in end:
+            end_dt = datetime.fromisoformat(end["dateTime"].replace("Z", "+00:00"))
+            end_time = end_dt.strftime("%I:%M %p")
+
+        location = event.get("location", "")
+
+        # Include calendar name if available
+        calendar_info = ""
+        if "calendarName" in event:
+            calendar_info = f" on {event['calendarName']}"
+
+        # Format based on whether it's an all-day event
+        if start_time == "all day":
+            return f"{title} all day{calendar_info}"
         else:
-            # Multiple days
-            start_str = start_date.strftime("%A, %B %d, %Y")
-            end_str = end_date.strftime("%A, %B %d, %Y")
-            lines.append(f"🕒 All day from {start_str} to {end_str}")
-    else:
-        # Timed event
-        start_time = event_dict.get("start_time")
-        end_time = event_dict.get("end_time")
-
-        if start_time and end_time:
-            # Format start and end times
-            same_day = start_time.date() == end_time.date()
-
-            if same_day:
-                # Same day
-                date_str = start_time.strftime("%A, %B %d, %Y")
-                start_time_str = start_time.strftime("%I:%M %p")
-                end_time_str = end_time.strftime("%I:%M %p")
-                lines.append(f"🕒 {date_str} from {start_time_str} to {end_time_str}")
+            if end_time:
+                time_range = f"{start_time} to {end_time}"
             else:
-                # Different days
-                start_str = start_time.strftime("%A, %B %d, %Y at %I:%M %p")
-                end_str = end_time.strftime("%A, %B %d, %Y at %I:%M %p")
-                lines.append(f"🕒 From {start_str} to {end_str}")
+                time_range = start_time
 
-    # Location
-    if event_dict.get("location"):
-        lines.append(f"📍 {event_dict['location']}")
+            if location:
+                return f"{time_range}: {title} at {location}{calendar_info}"
+            else:
+                return f"{time_range}: {title}{calendar_info}"
 
-    # Meeting link
-    if event_dict.get("meeting_link"):
-        lines.append(f"🔗 Meeting link: {event_dict['meeting_link']}")
+    # Handle custom format
+    elif "title" in event:
+        title = event.get("title", "")
+        start = event.get("start", "")
+        end = event.get("end", "")
+        location = event.get("location", "")
 
-    # Description (truncate if too long)
-    if event_dict.get("description"):
-        desc = event_dict["description"]
-        if len(desc) > 200:
-            desc = desc[:197] + "..."
-        lines.append(f"\n{desc}")
+        # Include calendar name if available
+        calendar_info = ""
+        if "calendar_name" in event:
+            calendar_info = f" on {event['calendar_name']}"
 
-    # Attendees
-    if event_dict.get("attendees"):
-        attendee_count = len(event_dict["attendees"])
-        if attendee_count > 0:
-            lines.append(f"\n👥 {attendee_count} attendee(s)")
+        if start and end:
+            if location:
+                return f"{start} to {end}: {title} at {location}{calendar_info}"
+            else:
+                return f"{start} to {end}: {title}{calendar_info}"
+        else:
+            return title
 
-            # List up to 5 attendees
-            for i, attendee in enumerate(event_dict["attendees"][:5]):
-                if isinstance(attendee, dict):
-                    name = attendee.get("name", attendee["email"])
-                    status = attendee.get("status", "")
-                    status_emoji = {
-                        "ACCEPTED": "✅",
-                        "DECLINED": "❌",
-                        "TENTATIVE": "❓",
-                        "NEEDS-ACTION": "⏳",
-                    }.get(status, "")
-
-                    lines.append(f"   {status_emoji} {name}")
-                else:
-                    lines.append(f"   {attendee}")
-
-            if attendee_count > 5:
-                lines.append(f"   ... and {attendee_count - 5} more")
-
-    # Recurrence
-    if event_dict.get("recurrence"):
-        recurrence = event_dict["recurrence"]
-        # Simplify RRULE for display
-        recurrence_display = recurrence.replace("RRULE:", "")
-        parts = recurrence_display.split(";")
-        freq = next(
-            (p.replace("FREQ=", "") for p in parts if p.startswith("FREQ=")), None
-        )
-
-        if freq:
-            freq_display = {
-                "DAILY": "Daily",
-                "WEEKLY": "Weekly",
-                "MONTHLY": "Monthly",
-                "YEARLY": "Yearly",
-            }.get(freq, freq.title())
-
-            lines.append(f"🔄 {freq_display} recurring event")
-
-    # Join all lines
-    return "\n".join(lines)
+    # Fallback format
+    return str(event)
 
 
 def format_datetime_range(start_time, end_time, is_all_day=False):

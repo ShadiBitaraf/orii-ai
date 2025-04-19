@@ -110,25 +110,90 @@ def process_query(query):
 
 
 def get_calendar_list_response():
-    """Get a response with the list of available calendars.
+    """Get a list of available calendars.
 
     Returns:
-        Response dictionary with calendar list
+        Response with calendar list information
     """
-    visible_calendars = get_visible_calendars()
+    try:
+        from .calendar_service import get_visible_calendars
 
-    if not visible_calendars:
+        try:
+            logger.debug("Retrieving calendar list")
+            calendars = get_visible_calendars()
+
+            if not calendars:
+                return {
+                    "status": "success",
+                    "message": "I currently have access to your primary calendar. I don't see any additional visible calendars associated with your account. You can add more calendars or make hidden ones visible through Google Calendar if needed.",
+                    "calendars": ["primary"],
+                }
+
+            calendar_list = []
+            for calendar in calendars:
+                try:
+                    # Use 'summary' field for the calendar name
+                    name = calendar.get("summary", "Unnamed Calendar")
+                    calendar_id = calendar.get("id", "unknown")
+                    is_primary = calendar.get("primary", False)
+                    color = calendar.get("color", "#000000")
+                    access_role = calendar.get("access_role", "reader")
+
+                    # Add details to the calendar list
+                    calendar_list.append(
+                        {
+                            "name": name,
+                            "id": calendar_id,
+                            "is_primary": is_primary,
+                            "color": color,
+                            "access_role": access_role,
+                        }
+                    )
+                except Exception as e:
+                    logger.error(f"Error processing calendar entry: {e}")
+                    # Skip this calendar and continue with others
+                    continue
+
+            calendar_names = [cal["name"] for cal in calendar_list]
+
+            if not calendar_names:
+                return {
+                    "status": "success",
+                    "message": "I have access to your primary calendar, but I couldn't retrieve specific details about other calendars.",
+                    "calendars": ["primary"],
+                }
+
+            # Create a natural language response
+            if len(calendar_names) == 1:
+                message = f"I have access to 1 calendar: {calendar_names[0]}."
+            else:
+                names_formatted = (
+                    ", ".join(calendar_names[:-1]) + " and " + calendar_names[-1]
+                )
+                message = f"I have access to {len(calendar_names)} visible calendars: {names_formatted}."
+
+            return {
+                "status": "success",
+                "message": message,
+                "calendars": calendar_list,
+                "calendar_count": len(calendar_list),
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting visible calendars: {e}")
+            # Return a more helpful error message
+            return {
+                "status": "success",
+                "message": "I have access to your primary calendar. There might be more calendars, but I'm having trouble retrieving the full list right now.",
+                "calendars": ["primary"],
+            }
+    except Exception as e:
+        logger.error(f"Error in get_calendar_list_response: {e}")
         return {
             "status": "error",
-            "message": "No visible calendars found",
-            "calendars": [],
+            "message": "I encountered an issue accessing your calendars. I'll work with your primary calendar for now.",
+            "calendars": ["primary"],
         }
-
-    return {
-        "status": "success",
-        "message": f"Found {len(visible_calendars)} calendars",
-        "calendars": visible_calendars,
-    }
 
 
 def get_visible_calendars():
@@ -151,13 +216,17 @@ def get_visible_calendars():
         # Format for display
         formatted_calendars = []
         for cal in selected_calendars:
-            primary_marker = " (primary)" if cal["primary"] else ""
+            primary_marker = " (primary)" if cal.get("primary", False) else ""
             formatted_calendars.append(
                 {
-                    "name": cal["name"] + primary_marker,
-                    "id": cal["id"],
-                    "color": cal["color"],
-                    "is_primary": cal["primary"],
+                    "name": cal.get("summary", "Unnamed") + primary_marker,
+                    "id": cal.get("id", ""),
+                    "color": cal.get("backgroundColor", "#000000"),
+                    "is_primary": cal.get("primary", False),
+                    "access_role": cal.get("accessRole", "reader"),
+                    "time_zone": cal.get("timeZone", ""),
+                    "selected": cal.get("selected", True),
+                    "summary": cal.get("summary", "Unnamed"),
                 }
             )
 

@@ -44,3 +44,9 @@ backend/test.db
 
 # Logs
 *.log
+
+# Google API credentials and tokens
+credentials.json
+token.json
+**/credentials.json
+**/token.json
