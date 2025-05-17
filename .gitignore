@@ -50,3 +50,6 @@ credentials.json
 token.json
 **/credentials.json
 **/token.json
+
+# macOS
+.DS_Store
