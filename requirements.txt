@@ -21,6 +21,7 @@ google-api-python-client==2.108.0
 dateparser==1.1.8
 icalendar==6.3.0
 spacy==3.8.4
+loguru==0.7.2
 
 # CLI dependencies
 prompt_toolkit==3.0.51
