@@ -13,13 +13,13 @@ import pytz
 # Add parent directory to path so we can import our modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
-from cli.calendar_service import (
+from backend.app.core.calendar.calendar_service import (
     get_calendar_service,
     get_events,
     export_events_to_ics,
     import_events_from_ics,
 )
-from cli.event_management import (
+from backend.app.core.calendar.event_management import (
     create_event,
     update_event,
     delete_event,

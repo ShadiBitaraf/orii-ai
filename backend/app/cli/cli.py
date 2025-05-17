@@ -9,11 +9,11 @@ import argparse
 import sys
 from typing import List, Optional
 
-from .calendar_service import get_calendar_service
-from .cache import get_cached_data, set_cached_data, clear_cache
+from ..core.calendar.calendar_service import get_calendar_service
+from ..utils.cache_utils import get_cached_data, set_cached_data, clear_cache
 from .commands import CommandHandlers
-from .llm_service import LLMService
-from .metrics import Metrics
+from ..core.llm.llm_service import LLMService
+from ..utils.metrics_utils import Metrics
 from .time_manager import format_datetime_range
 
 

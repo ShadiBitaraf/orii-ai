@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 
-from .calendar_service import get_calendar_service
+from ..core.calendar.calendar_service import get_calendar_service
 
 logger = logging.getLogger(__name__)
 

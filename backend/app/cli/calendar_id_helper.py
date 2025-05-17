@@ -28,7 +28,7 @@ def resolve_calendar_id(
     Returns:
         A valid calendar ID or None if no calendar could be found
     """
-    from .calendar_service import get_selected_calendars
+    from ..core.calendar.calendar_service import get_selected_calendars
 
     try:
         # Get all available calendars
@@ -114,7 +114,7 @@ def find_matching_calendars(service, search_term: str) -> List[Dict[str, Any]]:
     Returns:
         List of matching calendar dictionaries
     """
-    from .calendar_service import get_selected_calendars
+    from ..core.calendar.calendar_service import get_selected_calendars
 
     try:
         all_calendars = get_selected_calendars(service)

@@ -18,14 +18,14 @@ from .query_processor import (
     get_visible_calendars,
     get_calendar_list_response,
 )
-from .intent_processor import process_intent
-from .event_retrieval import (
+from ..core.intent.intent_processor import process_intent
+from ..core.calendar.event_retrieval import (
     get_events_in_range,
     search_events,
     get_upcoming_events,
     get_past_events,
 )
-from .calendar_service import get_calendar_service
+from ..core.calendar.calendar_service import get_calendar_service
 from .monitoring import record_calendar_request, get_calendar_request_stats
 
 # Setup logging

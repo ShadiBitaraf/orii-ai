@@ -6,16 +6,16 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timedelta, timezone
 
-from .calendar_service import (
+from ..core.calendar.calendar_service import (
     get_calendar_service,
     get_events,
     get_event,
     get_calendar_timezone,
 )
-from .cache import get_cached_data, set_cached_data, delete_cached_data
-from .llm_service import LLMService
-from .metrics import Metrics
-from .time_manager import (
+from ..utils.cache_utils import get_cached_data, set_cached_data, delete_cached_data
+from ..core.llm.llm_service import LLMService
+from ..utils.metrics_utils import Metrics
+from ..core.time.time_manager import (
     parse_time_range,
     parse_natural_language_datetime,
     format_datetime_range,
@@ -403,7 +403,7 @@ class CommandHandlers:
         """
         start_time = time.time()
         try:
-            from .cache import clear_cache, get_cache_stats
+            from ..utils.cache_utils import clear_cache, get_cache_stats
 
             clear_cache()  # This function doesn't return a value in the new implementation
             success = True
@@ -432,7 +432,7 @@ class CommandHandlers:
         """
         start_time = time.time()
         try:
-            from .cache import get_cache_stats
+            from ..utils.cache_utils import get_cache_stats
 
             stats = get_cache_stats()
 

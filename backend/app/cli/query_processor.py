@@ -6,11 +6,11 @@ import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
-from .intent_detection import determine_query_intent
+from ..core.intent.intent_detection import determine_query_intent
 from .monitoring import record_calendar_request
-from .calendar_service import get_selected_calendars, get_calendar_service
-from .event_management import format_event_text
-from .time_manager import parse_time_range
+from ..core.calendar.calendar_service import get_selected_calendars, get_calendar_service
+from ..core.calendar.event_management import format_event_text
+from ..core.time.time_manager import parse_time_range
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ def process_query(query):
     )
 
     # Import process_intent here to avoid circular imports
-    from .intent_processor import process_intent
+    from ..core.intent.intent_processor import process_intent
 
     # Process the intent
     result = process_intent(
@@ -116,7 +116,7 @@ def get_calendar_list_response():
         Response with calendar list information
     """
     try:
-        from .calendar_service import get_visible_calendars
+        from ..core.calendar.calendar_service import get_visible_calendars
 
         try:
             logger.debug("Retrieving calendar list")
