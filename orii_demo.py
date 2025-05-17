@@ -17,7 +17,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.styles import Style
 from prompt_toolkit.formatted_text import HTML
 import traceback
-from dateutil import parser
+# from dateutil import parser
 from datetime import timedelta
 
 # Add both the current directory and the backend directory to the path

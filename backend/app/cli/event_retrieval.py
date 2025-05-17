@@ -4,7 +4,8 @@ Event retrieval functionality for the calendar assistant CLI.
 
 import logging
 from typing import Dict, Any, List, Optional, Callable
-from datetime import datetime, timedelta, timezone, tzlocal
+from datetime import datetime, timedelta, timezone
+import tzlocal
 import re
 import dateparser
 import spacy
@@ -12,7 +13,7 @@ import os
 
 from .calendar_service import get_calendar_service
 from .calendar_id_helper import resolve_calendar_id, find_matching_calendars
-from .logger import get_logger
+from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
 
