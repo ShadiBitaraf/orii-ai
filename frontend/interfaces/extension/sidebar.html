@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ORII Calendar Assistant</title>
+    <link rel="stylesheet" href="css/sidebar.css" />
+  </head>
+  <body>
+    <div class="sidebar-container">
+      <div class="sidebar-header">
+        <h2 class="sidebar-title">ORII Assistant</h2>
+        <button class="close-button" id="closeButton" title="Close sidebar">
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M18 6L6 18M6 6l12 12"
+              stroke="#5f6368"
+              stroke-width="2"
+              stroke-linecap="round"
+            />
+          </svg>
+        </button>
+      </div>
+
+      <div class="chat-container">
+        <div id="messagesContainer" class="messages-container">
+          <div class="message system">
+            <div class="message-content">
+              Hello! I'm ORII, your calendar assistant. How can I help you
+              today?
+            </div>
+          </div>
+        </div>
+
+        <div class="input-container">
+          <textarea
+            id="userInput"
+            placeholder="Ask about your calendar..."
+            rows="1"
+          ></textarea>
+          <button id="sendButton" class="send-button">
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"
+                fill="currentColor"
+              />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script src="js/sidebar.js"></script>
+  </body>
+</html>

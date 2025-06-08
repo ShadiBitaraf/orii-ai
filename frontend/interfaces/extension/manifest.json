@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "ORII Calendar Assistant",
+  "version": "0.1.0",
+  "description": "AI-powered calendar assistant that integrates directly into Google Calendar",
+  "action": {
+    "default_title": "ORII Calendar Assistant"
+  },
+  "permissions": ["activeTab", "storage", "identity"],
+  "host_permissions": [
+    "https://calendar.google.com/*",
+    "http://localhost:5001/*"
+  ],
+  "background": {
+    "service_worker": "js/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://calendar.google.com/*"],
+      "js": ["js/content.js"],
+      "css": ["css/sidebar.css"]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["sidebar.html", "css/*", "js/*", "images/*"],
+      "matches": ["https://calendar.google.com/*"]
+    }
+  ]
+}
