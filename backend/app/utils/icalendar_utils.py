@@ -361,7 +361,7 @@ def event_to_dict(event: Event) -> Dict[str, Any]:
 
 def dict_to_google_event(event_dict: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Convert a dictionary to a Google Calendar event format.
+    Convert a dictionary to a Google Calendar event format with comprehensive field support.
 
     Args:
         event_dict: Dictionary with event details
@@ -391,48 +391,89 @@ def dict_to_google_event(event_dict: Dict[str, Any]) -> Dict[str, Any]:
         ] = uid
 
     # Handle dates and times
-    is_all_day = event_dict.get("is_all_day", False)
+    is_all_day = event_dict.get("is_all_day", False) or event_dict.get("all_day", False)
     timezone_str = event_dict.get("timezone", DEFAULT_TIMEZONE)
 
     if is_all_day:
         # All-day event
-        start_date = event_dict.get("start_date")
+        start_date = event_dict.get("start_date") or event_dict.get("start_datetime")
         if not start_date:
             start_date = date.today().isoformat()
+        elif "T" in str(start_date):
+            # Convert datetime to date
+            start_date = (
+                datetime.fromisoformat(str(start_date).split("T")[0]).date().isoformat()
+            )
 
         google_event["start"] = {"date": start_date}
 
         # End date is optional
-        end_date = event_dict.get("end_date")
+        end_date = event_dict.get("end_date") or event_dict.get("end_datetime")
         if not end_date:
             # Default to 1 day event
             end_date = (
                 datetime.fromisoformat(start_date).date() + timedelta(days=1)
             ).isoformat()
+        elif "T" in str(end_date):
+            # Convert datetime to date
+            end_date = (
+                datetime.fromisoformat(str(end_date).split("T")[0]).date().isoformat()
+            )
 
         google_event["end"] = {"date": end_date}
     else:
-        # Timed event
-        start_time = event_dict.get("start_time")
+        # Timed event - support both start_time and start_datetime fields
+        start_time = event_dict.get("start_time") or event_dict.get("start_datetime")
         if not start_time:
             # Default to now
             start_time = (
                 datetime.now().astimezone(pytz.timezone(timezone_str)).isoformat()
             )
 
+        # Ensure timezone info is properly formatted
+        if (
+            not start_time.endswith("Z")
+            and "+" not in start_time
+            and "-" not in start_time[-6:]
+        ):
+            # Add timezone info if missing
+            start_time = start_time + ("+00:00" if timezone_str == "UTC" else "")
+
         google_event["start"] = {"dateTime": start_time, "timeZone": timezone_str}
 
-        # End time is optional
-        end_time = event_dict.get("end_time")
+        # End time is optional - support both end_time and end_datetime fields
+        end_time = event_dict.get("end_time") or event_dict.get("end_datetime")
         if not end_time:
             # Default to 1 hour event
-            end_time = (
-                datetime.fromisoformat(start_time) + timedelta(hours=1)
-            ).isoformat()
+            try:
+                # Parse start_time properly to add 1 hour
+                if start_time.endswith("Z"):
+                    start_dt = datetime.fromisoformat(start_time[:-1] + "+00:00")
+                elif "+" in start_time or start_time.count("-") >= 3:
+                    start_dt = datetime.fromisoformat(start_time)
+                else:
+                    start_dt = datetime.fromisoformat(start_time)
+
+                end_dt = start_dt + timedelta(hours=1)
+                end_time = end_dt.isoformat()
+            except Exception:
+                # Fallback if parsing fails
+                end_time = (
+                    datetime.fromisoformat(start_time.split("+")[0].split("Z")[0])
+                    + timedelta(hours=1)
+                ).isoformat()
+
+        # Ensure end time timezone format matches start time
+        if (
+            not end_time.endswith("Z")
+            and "+" not in end_time
+            and "-" not in end_time[-6:]
+        ):
+            end_time = end_time + ("+00:00" if timezone_str == "UTC" else "")
 
         google_event["end"] = {"dateTime": end_time, "timeZone": timezone_str}
 
-    # Handle recurrence
+    # Handle recurrence with enhanced RRULE support
     if "recurrence" in event_dict and event_dict["recurrence"]:
         recurrence = event_dict["recurrence"]
         if isinstance(recurrence, dict):
@@ -442,35 +483,96 @@ def dict_to_google_event(event_dict: Dict[str, Any]) -> Dict[str, Any]:
                 rrule_parts.append(f"{key}={value}")
             google_event["recurrence"] = [f"RRULE:{';'.join(rrule_parts)}"]
         elif isinstance(recurrence, str):
-            google_event["recurrence"] = [f"RRULE:{recurrence}"]
+            # Handle both full RRULE and simple patterns
+            if recurrence.startswith("RRULE:"):
+                google_event["recurrence"] = [recurrence]
+            elif recurrence.startswith("FREQ="):
+                google_event["recurrence"] = [f"RRULE:{recurrence}"]
+            else:
+                # Simple patterns
+                simple_patterns = {
+                    "daily": "FREQ=DAILY",
+                    "weekly": "FREQ=WEEKLY",
+                    "monthly": "FREQ=MONTHLY",
+                    "yearly": "FREQ=YEARLY",
+                }
+                rrule = simple_patterns.get(recurrence.lower(), f"FREQ=WEEKLY")
+                google_event["recurrence"] = [f"RRULE:{rrule}"]
         elif isinstance(recurrence, list):
             google_event["recurrence"] = recurrence
 
-    # Handle attendees
+    # Also check for recurrence_rule field
+    elif "recurrence_rule" in event_dict and event_dict["recurrence_rule"]:
+        recurrence_rule = event_dict["recurrence_rule"]
+        if isinstance(recurrence_rule, str):
+            if recurrence_rule.startswith("RRULE:"):
+                google_event["recurrence"] = [recurrence_rule]
+            elif recurrence_rule.startswith("FREQ="):
+                google_event["recurrence"] = [f"RRULE:{recurrence_rule}"]
+            else:
+                # Simple patterns
+                simple_patterns = {
+                    "daily": "FREQ=DAILY",
+                    "weekly": "FREQ=WEEKLY",
+                    "monthly": "FREQ=MONTHLY",
+                    "yearly": "FREQ=YEARLY",
+                }
+                rrule = simple_patterns.get(recurrence_rule.lower(), f"FREQ=WEEKLY")
+                google_event["recurrence"] = [f"RRULE:{rrule}"]
+
+    # Handle attendees with enhanced support
     if "attendees" in event_dict and event_dict["attendees"]:
         google_attendees = []
         for attendee in event_dict["attendees"]:
             if isinstance(attendee, dict):
-                google_attendee = {"email": attendee.get("email")}
+                google_attendee = {}
 
+                # Email is required
+                if "email" in attendee:
+                    google_attendee["email"] = attendee["email"]
+                else:
+                    continue  # Skip attendees without email
+
+                # Add optional fields
                 if "name" in attendee:
                     google_attendee["displayName"] = attendee["name"]
                 if "status" in attendee:
                     status = attendee["status"].upper()
-                    if status == "ACCEPTED":
-                        google_attendee["responseStatus"] = "accepted"
-                    elif status == "DECLINED":
-                        google_attendee["responseStatus"] = "declined"
-                    elif status == "TENTATIVE":
-                        google_attendee["responseStatus"] = "tentative"
-                    else:
-                        google_attendee["responseStatus"] = "needsAction"
+                    status_map = {
+                        "ACCEPTED": "accepted",
+                        "DECLINED": "declined",
+                        "TENTATIVE": "tentative",
+                        "NEEDS-ACTION": "needsAction",
+                    }
+                    google_attendee["responseStatus"] = status_map.get(
+                        status, "needsAction"
+                    )
+
+                # Add optional organizer flag
+                if attendee.get("organizer", False):
+                    google_attendee["organizer"] = True
 
                 google_attendees.append(google_attendee)
-            elif isinstance(attendee, str):
-                google_attendees.append({"email": attendee})
 
-        google_event["attendees"] = google_attendees
+            elif isinstance(attendee, str):
+                # Handle both email-only strings and "Name <email>" format
+                if "<" in attendee and ">" in attendee:
+                    # Parse "Name <email>" format
+                    import re
+
+                    match = re.match(r"^(.*?)\s*<([^>]+)>$", attendee.strip())
+                    if match:
+                        name, email = match.groups()
+                        google_attendees.append(
+                            {"email": email.strip(), "displayName": name.strip()}
+                        )
+                    else:
+                        google_attendees.append({"email": attendee})
+                else:
+                    google_attendees.append({"email": attendee})
+
+        if google_attendees:
+            google_event["attendees"] = google_attendees
 
     # Handle organizer
     if "organizer" in event_dict:
@@ -483,25 +585,92 @@ def dict_to_google_event(event_dict: Dict[str, Any]) -> Dict[str, Any]:
         elif isinstance(organizer, str):
             google_event["organizer"] = {"email": organizer}
 
+    # Handle reminders - support both single reminder and multiple reminders
+    reminders = event_dict.get("reminder_minutes") or event_dict.get("reminders")
+    if reminders:
+        if isinstance(reminders, (int, float)):
+            # Single reminder
+            google_event["reminders"] = {
+                "useDefault": False,
+                "overrides": [{"method": "popup", "minutes": int(reminders)}],
+            }
+        elif isinstance(reminders, list):
+            # Multiple reminders
+            overrides = []
+            for reminder in reminders:
+                if isinstance(reminder, (int, float)):
+                    overrides.append({"method": "popup", "minutes": int(reminder)})
+                elif isinstance(reminder, dict):
+                    method = reminder.get("method", "popup")
+                    minutes = reminder.get("minutes", 15)
+                    overrides.append({"method": method, "minutes": int(minutes)})
+
+            if overrides:
+                google_event["reminders"] = {
+                    "useDefault": False,
+                    "overrides": overrides,
+                }
+    else:
+        # Use default reminders
+        google_event["reminders"] = {"useDefault": True}
+
+    # Handle Google Meet integration
+    if event_dict.get("add_meet", False):
+        google_event["conferenceData"] = {
+            "createRequest": {
+                "requestId": str(uuid.uuid4()),  # Unique request ID
+                "conferenceSolutionKey": {"type": "hangoutsMeet"},
+            }
+        }
+
+    # Handle visibility/privacy
+    visibility = event_dict.get("visibility", "default")
+    if visibility in ["default", "public", "private", "confidential"]:
+        google_event["visibility"] = visibility
+
+    # Handle guest permissions
+    if "guests_can_modify" in event_dict:
+        google_event["guestsCanModify"] = bool(event_dict["guests_can_modify"])
+
+    if "guests_can_invite_others" in event_dict:
+        google_event["guestsCanInviteOthers"] = bool(
+            event_dict["guests_can_invite_others"]
+        )
+
+    if "guests_can_see_other_guests" in event_dict:
+        google_event["guestsCanSeeOtherGuests"] = bool(
+            event_dict["guests_can_see_other_guests"]
+        )
+
+    # Handle event color
+    color_id = event_dict.get("color_id") or event_dict.get("color")
+    if color_id:
+        google_event["colorId"] = str(color_id)
+
+    # Handle busy/free status (transparency)
+    busy_status = event_dict.get("busy_status", "busy")
+    if busy_status == "free":
+        google_event["transparency"] = "transparent"
+    else:
+        google_event["transparency"] = "opaque"
+
     # Handle status
     if "status" in event_dict:
         status = event_dict["status"].upper()
-        if status == "CONFIRMED":
-            google_event["status"] = "confirmed"
-        elif status == "TENTATIVE":
-            google_event["status"] = "tentative"
-        elif status == "CANCELLED":
-            google_event["status"] = "cancelled"
+        status_map = {
+            "CONFIRMED": "confirmed",
+            "TENTATIVE": "tentative",
+            "CANCELLED": "cancelled",
+        }
+        google_event["status"] = status_map.get(status, "confirmed")
 
-    # Handle transparency
-    if "transparency" in event_dict:
-        google_event["transparency"] = (
-            "transparent" if event_dict["transparency"] else "opaque"
-        )
+    # Handle event ID for updates
+    if "id" in event_dict and event_dict["id"]:
+        google_event["id"] = event_dict["id"]
 
-    # Handle color
-    if "color" in event_dict:
-        google_event["colorId"] = str(event_dict["color"])
+    # Handle calendar ID (not part of event, but used for API calls)
+    if "calendar_id" in event_dict:
+        google_event["_calendar_id"] = event_dict["calendar_id"]
 
     return google_event
 
