@@ -204,10 +204,11 @@ def get_selected_calendars(service, calendar_ids=None):
 
     # Filter out hidden calendars - in Google Calendar API,
     # calendars have a "selected" property which indicates if they're visible
+    # According to API docs: "selected" default is False, so we need explicit True
     visible_calendars = [
         cal
         for cal in all_calendars
-        if cal.get("selected", True) and not cal.get("hidden", False)
+        if cal.get("selected") is True and not cal.get("hidden", False)
     ]
 
     logger.info(
