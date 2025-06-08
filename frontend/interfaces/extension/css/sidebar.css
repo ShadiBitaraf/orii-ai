@@ -225,4 +225,28 @@ body {
 /* Ensure proper touch scrolling on mobile */
 .messages-container {
   -webkit-overflow-scrolling: touch;
+}
+
+/* List styling for bullet points */
+.message-content ul {
+  margin: 8px 0;
+  padding-left: 16px;
+  list-style-type: disc;
+}
+
+.message-content li {
+  margin-bottom: 4px;
+  line-height: 1.4;
+}
+
+/* Bold text styling */
+.message-content strong {
+  font-weight: 600;
+  color: inherit;
+}
+
+/* Better line spacing for formatted content */
+.message-content {
+  white-space: pre-wrap; /* Preserve whitespace and line breaks */
+  word-break: break-word;
 } 

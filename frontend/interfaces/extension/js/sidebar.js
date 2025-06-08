@@ -200,7 +200,10 @@ function addMessageToChat(type, content) {
 
   const contentDiv = document.createElement("div");
   contentDiv.className = "message-content";
-  contentDiv.textContent = content;
+
+  // Convert markdown-like formatting to HTML for better display
+  const formattedContent = formatMessageContent(content);
+  contentDiv.innerHTML = formattedContent;
 
   messageDiv.appendChild(contentDiv);
   messagesContainer.appendChild(messageDiv);
@@ -209,6 +212,26 @@ function addMessageToChat(type, content) {
   setTimeout(() => {
     scrollToBottom();
   }, 10);
+}
+
+// Format message content for better display
+function formatMessageContent(content) {
+  if (!content) return "";
+
+  // Convert bullet points
+  let formatted = content.replace(/^• (.+)$/gm, "<li>$1</li>");
+
+  // Wrap list items in <ul> tags
+  formatted = formatted.replace(/((<li>.*<\/li>\s*)+)/gs, "<ul>$1</ul>");
+
+  // Convert **bold** text
+  formatted = formatted.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+
+  // Convert line breaks to <br> tags
+  formatted = formatted.replace(/\n/g, "<br>");
+
+  // Handle emojis and special characters properly
+  return formatted;
 }
 
 // Add loading indicator
