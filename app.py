@@ -1,14 +1,31 @@
-from flask import Flask, request, jsonify, render_template, send_from_directory
+"""
+initial Flask web interface for future development
+"""
+
+from flask import Flask, request, jsonify, render_template, send_from_directory  # type: ignore
+from flask_cors import CORS  # type: ignore
 import os
 import sys
 import json
 import traceback
 from datetime import datetime
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    print("✅ Environment variables loaded from .env file")
+except ImportError:
+    print("⚠️  python-dotenv not available, using system environment variables")
+except Exception as e:
+    print(f"⚠️  Error loading .env file: {e}")
+
 # Import the modified orii_demo functions
 from orii_demo import process_query, get_logs_path
 
 app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
 
 # Dictionary to store conversation contexts by session ID
 conversation_contexts = {}
@@ -130,4 +147,4 @@ if __name__ == "__main__":
     # Create static directory if it doesn't exist
     os.makedirs("static", exist_ok=True)
 
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5001)

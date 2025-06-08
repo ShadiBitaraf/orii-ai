@@ -20,10 +20,10 @@ from app.utils.security import (
 )
 from app.api import calendar
 from app.core.config import get_settings
-from app.utils.logger import setup_logger
+from app.utils.logger import get_logger
 
 # Setup logger for this module
-logger = setup_logger("app.main")
+logger = get_logger("app.main")
 
 # Get settings (settings are fetched for environment-specific configuration)
 settings = get_settings()
@@ -162,6 +162,37 @@ def read_current_user(current_user: models.User = Depends(get_current_user)) -> 
     """Get current user"""
     # logger.debug(f"Fetching current user: {current_user.email}")
     return current_user
+
+
+# Chat query endpoint for Chrome extension
+@app.post("/api/query", tags=["chat"])
+async def process_query(request: Request, db: Session = Depends(get_db)):
+    """Process chat query from Chrome extension"""
+    try:
+        # Parse request body
+        body = await request.json()
+        query = body.get("query", "")
+        session_id = body.get("session_id", "default")
+
+        logger.info(f"Processing query: {query} for session: {session_id}")
+
+        # For now, return a simple response
+        # TODO: Integrate with your ORII processing logic from orii_demo.py
+        response_text = f"I received your query: '{query}'. The backend integration is working! However, I need to connect to the ORII processing logic to provide intelligent calendar responses."
+
+        return {
+            "status": "success",
+            "response": response_text,
+            "timestamp": "2024-01-01T12:00:00",  # TODO: Use actual timestamp
+        }
+
+    except Exception as e:
+        logger.error(f"Error processing query: {str(e)}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "timestamp": "2024-01-01T12:00:00",  # TODO: Use actual timestamp
+        }
 
 
 # Health check endpoint (used for checking the API health)

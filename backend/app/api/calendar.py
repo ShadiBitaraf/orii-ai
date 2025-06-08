@@ -11,11 +11,11 @@ from app.utils.security import get_current_user
 from app.models.user import User
 from datetime import datetime, timedelta, timezone
 from app.core.config import get_settings
-from app.utils.logger import setup_logger
+from app.utils.logger import get_logger
 
 # Initialize settings and logging
 settings = get_settings()
-logger = setup_logger("app.api.calendar")
+logger = get_logger("app.api.calendar")
 
 # Create router with explicit tags and prefix
 router = APIRouter(
