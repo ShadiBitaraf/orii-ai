@@ -128,6 +128,21 @@ class EnhancedCalendarProcessor:
             elif intent == "FETCH_EVENTS_SEMANTIC":
                 return self._handle_semantic_query(user_query, user_context, confidence)
 
+            elif intent == "CREATE_EVENT":
+                return self._handle_create_event_query(
+                    user_query, user_context, confidence
+                )
+
+            elif intent == "UPDATE_EVENT":
+                return self._handle_update_event_query(
+                    user_query, user_context, confidence
+                )
+
+            elif intent == "DELETE_EVENT":
+                return self._handle_delete_event_query(
+                    user_query, user_context, confidence
+                )
+
             elif intent == "CLARIFICATION_NEEDED":
                 clarification = self.request_clarification(
                     user_query, "ambiguous_query"
@@ -200,6 +215,139 @@ class EnhancedCalendarProcessor:
             )
         else:
             return self._handle_semantic_query(enhanced_query, user_context, confidence)
+
+    def _handle_create_event_query(
+        self, user_query: str, user_context: Dict, confidence: float
+    ) -> QueryResult:
+        """Handle CREATE_EVENT intent with comprehensive event creation"""
+        self.logger.info(f"Processing CREATE_EVENT: {user_query}")
+
+        try:
+            # Extract detailed event information using LLM
+            event_details = self._extract_comprehensive_event_details(
+                user_query, user_context
+            )
+
+            if event_details.get("needs_clarification", False):
+                return QueryResult(
+                    intent="CREATE_EVENT",
+                    response=event_details.get(
+                        "clarification_question",
+                        "Could you provide more details about the event?",
+                    ),
+                    events=[],
+                    confidence=confidence,
+                    needs_clarification=True,
+                    clarification_question=event_details.get(
+                        "clarification_question", ""
+                    ),
+                )
+
+            # Validate required fields
+            if not event_details.get("summary"):
+                return QueryResult(
+                    intent="CREATE_EVENT",
+                    response="I need at least an event title to create the event. What would you like to call it?",
+                    events=[],
+                    confidence=confidence,
+                    needs_clarification=True,
+                    clarification_question="What would you like to call the event?",
+                )
+
+            if not event_details.get("start_datetime"):
+                return QueryResult(
+                    intent="CREATE_EVENT",
+                    response="When would you like to schedule this event?",
+                    events=[],
+                    confidence=confidence,
+                    needs_clarification=True,
+                    clarification_question="When would you like to schedule this event?",
+                )
+
+            # Create the event
+            if self.calendar_available:
+                try:
+                    service = self.get_calendar_service()
+
+                    # Resolve calendar name to calendar ID
+                    calendar_name = event_details.get("calendar_name", "primary")
+                    calendar_id = self._resolve_calendar_name_to_id(
+                        service, calendar_name
+                    )
+
+                    # Import the create_event function
+                    from ..core.calendar.event_management import create_event
+
+                    created_event = create_event(
+                        service, event_details, calendar_id=calendar_id
+                    )
+
+                    # Generate conversational response
+                    response = self._generate_event_creation_response(
+                        created_event, user_query
+                    )
+
+                    return QueryResult(
+                        intent="CREATE_EVENT",
+                        response=response,
+                        events=[created_event],
+                        confidence=confidence,
+                        needs_clarification=False,
+                    )
+
+                except Exception as e:
+                    self.logger.error(f"Error creating event: {e}")
+                    return QueryResult(
+                        intent="CREATE_EVENT",
+                        response=f"I encountered an error creating the event: {str(e)}. Please try again.",
+                        events=[],
+                        confidence=confidence,
+                        needs_clarification=False,
+                    )
+            else:
+                return QueryResult(
+                    intent="CREATE_EVENT",
+                    response="Calendar service is not available. Please check your Google Calendar connection.",
+                    events=[],
+                    confidence=confidence,
+                    needs_clarification=False,
+                )
+
+        except Exception as e:
+            self.logger.error(f"Error in _handle_create_event_query: {e}")
+            return QueryResult(
+                intent="CREATE_EVENT",
+                response="I encountered an error processing your request. Please try again with more details.",
+                events=[],
+                confidence=0.0,
+                needs_clarification=False,
+            )
+
+    def _handle_update_event_query(
+        self, user_query: str, user_context: Dict, confidence: float
+    ) -> QueryResult:
+        """Handle UPDATE_EVENT intent"""
+        # TODO: Implement update event functionality for future iterations
+        return QueryResult(
+            intent="UPDATE_EVENT",
+            response="Event updating functionality is coming soon! For now, you can delete the old event and create a new one.",
+            events=[],
+            confidence=confidence,
+            needs_clarification=False,
+        )
+
+    def _handle_delete_event_query(
+        self, user_query: str, user_context: Dict, confidence: float
+    ) -> QueryResult:
+        """Handle DELETE_EVENT intent"""
+        # TODO: Implement delete event functionality for future iterations
+        return QueryResult(
+            intent="DELETE_EVENT",
+            response="Event deletion functionality is coming soon! You can manually delete events from your Google Calendar for now.",
+            events=[],
+            confidence=confidence,
+            needs_clarification=False,
+        )
 
     def _handle_time_based_query(
         self, user_query: str, user_context: Dict, confidence: float
@@ -504,8 +652,11 @@ Classify the intent into ONE of these categories:
 2. CALENDAR_INFO - Questions about calendar access, how the system works
 3. FETCH_EVENTS_TIME - Time-based calendar queries (today, tomorrow, next week, etc.)
 4. FETCH_EVENTS_SEMANTIC - Semantic event searches (therapy, dentist, meetings with person X, flights, travel)
-5. CLARIFICATION_FOLLOWUP - Follow-up responses to previous clarification questions
-6. CLARIFICATION_NEEDED - Query is too ambiguous to process
+5. CREATE_EVENT - Creating new calendar events (schedule, add, create, book, set up)
+6. UPDATE_EVENT - Modifying existing events (change, reschedule, move, update)
+7. DELETE_EVENT - Removing events (cancel, delete, remove)
+8. CLARIFICATION_FOLLOWUP - Follow-up responses to previous clarification questions
+9. CLARIFICATION_NEEDED - Query is too ambiguous to process
 
 **IMPORTANT TIME DETECTION:**
 - Words like "last", "previous", "when was" = look in PAST
@@ -523,6 +674,11 @@ Examples:
 "What do I have tomorrow?" → FETCH_EVENTS_TIME
 "When was my last therapy session?" → FETCH_EVENTS_SEMANTIC (PAST)
 "When is my flight to SF?" → FETCH_EVENTS_SEMANTIC (FUTURE)
+"Schedule a meeting with John tomorrow at 2pm" → CREATE_EVENT
+"Book a dentist appointment for next Friday" → CREATE_EVENT
+"Add lunch with Sarah to my calendar" → CREATE_EVENT
+"Change my 3pm meeting to 4pm" → UPDATE_EVENT
+"Cancel my dentist appointment" → DELETE_EVENT
 "therapy" (after asking about therapy) → CLARIFICATION_FOLLOWUP
 "sfo" (after asking about flights) → CLARIFICATION_FOLLOWUP
 "Show me meetings" → CLARIFICATION_NEEDED (missing time context)
@@ -531,8 +687,8 @@ Return JSON with this format:
 {{
   "intent": "FETCH_EVENTS_SEMANTIC",
   "confidence": 0.95,
-  "time_direction": "past|future|present",
-  "is_followup": true|false,
+  "time_direction": "past_or_future_or_present",
+  "is_followup": true_or_false,
   "original_context": "extracted context from conversation if followup"
 }}"""
 
@@ -602,7 +758,7 @@ Return JSON:
   "start_datetime": "2025-06-08T00:00:00",
   "end_datetime": "2025-06-08T23:59:59",
   "time_description": "today",
-  "time_direction": "past|present|future",
+  "time_direction": "past_or_present_or_future",
   "confidence": 0.98
 }}
 
@@ -1064,6 +1220,306 @@ I have access to your Google Calendar and can understand natural language querie
             self.logger.error(f"Error in incremental search: {e}")
             return []
 
+    def _extract_comprehensive_event_details(
+        self, user_query: str, user_context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Extract comprehensive event details from user query using advanced LLM parsing"""
+
+        current_datetime = user_context.get(
+            "current_datetime", datetime.now().isoformat()
+        )
+        user_timezone = user_context.get("timezone", "America/New_York")
+
+        prompt = f"""
+You are an expert calendar assistant. Parse this natural language query into comprehensive event details.
+
+Current date and time: {current_datetime}
+User timezone: {user_timezone}
+User query: "{user_query}"
+
+**REQUIRED FIELDS:**
+- summary: Event title/name
+- start_datetime: Start time in ISO format (YYYY-MM-DDTHH:MM:SS)
+- end_datetime: End time in ISO format (if not specified, add 1 hour to start)
+
+**OPTIONAL FIELDS:**
+- description: Event description/notes
+- location: Physical or virtual location
+- attendees: List of email addresses or names
+- all_day: Boolean - true if all day event
+- recurrence_rule: For repeating events (daily, weekly, monthly, etc.)
+- reminder_minutes: List of reminder times in minutes before event [15, 60, 1440] (default [15])
+- add_meet: Boolean - true if user wants Google Meet link
+- calendar_name: Which calendar to use by name (extract from user query, default "primary")
+- visibility: "default", "public", "private" (default "default")
+- color_id: Event color (1-11) based on context or user preference
+- busy_status: "busy" or "free" (default "busy")
+- guests_can_modify: Boolean - can attendees edit event (default false)
+- guests_can_invite_others: Boolean - can attendees add others (default true)
+- guests_can_see_other_guests: Boolean - can attendees see guest list (default true)
+
+**ADVANCED RECURRENCE PARSING:**
+Parse complex recurrence patterns:
+- "daily" → FREQ=DAILY
+- "weekly" → FREQ=WEEKLY  
+- "monthly" → FREQ=MONTHLY
+- "every weekday" → FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR
+- "every Tuesday and Thursday" → FREQ=WEEKLY;BYDAY=TU,TH
+- "first Monday of every month" → FREQ=MONTHLY;BYDAY=1MO
+- "every 2 weeks" → FREQ=WEEKLY;INTERVAL=2
+- "daily for 10 days" → FREQ=DAILY;COUNT=10
+- "weekly until Dec 31" → FREQ=WEEKLY;UNTIL=20251231T235959Z
+
+**SMART REMINDER PARSING:**
+- "remind me 30 minutes before" → [30]
+- "remind me an hour and 15 minutes before" → [60, 15]
+- "remind me the day before" → [1440]
+- "remind me a week before and an hour before" → [10080, 60]
+- default to [15] if not specified
+
+**SMART COLOR DETECTION:**
+Assign colors based on event type:
+- Work/business meetings → 1 (lavender)
+- Personal/social → 2 (sage)
+- Health/medical → 3 (grape)
+- Exercise/fitness → 4 (flamingo)
+- Travel → 5 (banana)
+- Education/learning → 6 (tangerine)
+- Deadlines/important → 7 (peacock)
+- Family → 8 (graphite)
+- Entertainment → 9 (blueberry)
+- Food/dining → 10 (basil)
+- Other → 11 (tomato)
+
+**ATTENDEE PARSING:**
+Extract emails and names intelligently:
+- "meeting with john@company.com" → ["john@company.com"]
+- "lunch with Sarah Johnson sarah.j@email.com" → [{{"email": "sarah.j@email.com", "name": "Sarah Johnson"}}]
+- "team meeting with John, Sarah, and mike@work.com" → [{{"name": "John"}}, {{"name": "Sarah"}}, {{"email": "mike@work.com"}}]
+
+**CALENDAR PARSING:**
+Extract calendar names from user queries:
+- "add to my jetski calendar" → calendar_name: "jetski"
+- "create on my work calendar" → calendar_name: "work"
+- "add to personal calendar" → calendar_name: "personal"
+- "schedule in my family calendar" → calendar_name: "family"
+- "put on my travel calendar" → calendar_name: "travel"
+- "add to calendar" (no specific calendar) → calendar_name: "primary"
+
+**SMART PARSING EXAMPLES:**
+- "lunch with john@company.com tomorrow at noon" → attendees: [{{"email": "john@company.com"}}], start: tomorrow 12:00, end: tomorrow 13:00
+- "daily standup at 9am starting Monday, remind me 5 minutes before" → recurrence: "FREQ=DAILY", reminder_minutes: [5]
+- "all day conference next Friday, color it red" → all_day: true, color_id: 11
+- "private meeting with CEO tomorrow 2pm, don't let others see guests" → visibility: "private", guests_can_see_other_guests: false
+- "team meeting with Google Meet link" → add_meet: true
+- "doctor appointment, mark as free time" → busy_status: "free", color_id: 3
+- "weekly team standup every Tuesday at 10am for 6 weeks" → recurrence: "FREQ=WEEKLY;BYDAY=TU;COUNT=6"
+- "add a block to my jetski calendar at 2pm today" → calendar_name: "jetski", start: today 14:00
+- "schedule meeting on my work calendar tomorrow" → calendar_name: "work", start: tomorrow
+
+**DATE/TIME PARSING - BE VERY PRECISE:**
+- "tomorrow" = next day from current_datetime
+- "next Friday" = next occurring Friday  
+- "at 2pm" = 14:00:00 (NOT 23:30 or any other time!)
+- "at noon" = 12:00:00
+- "in the morning" = 09:00:00 (default)
+- "in the afternoon" = 14:00:00 (default)
+- "in the evening" = 18:00:00 (default)
+
+**CRITICAL REQUIREMENTS:**
+- ALWAYS convert times correctly: "2pm" = "14:00:00", NOT "23:30:00"
+- ALWAYS create 1-hour duration if no end time specified
+- Use the user's timezone: {user_timezone}
+- If no specific duration mentioned, make it exactly 1 hour long
+
+**VALIDATION:**
+- If date/time is unclear or missing, set needs_clarification: true
+- If title is missing, set needs_clarification: true  
+- Always include clarification_question if needs_clarification is true
+
+Return JSON format:
+{{
+  "summary": "Meeting with John",
+  "start_datetime": "2025-06-09T14:00:00",
+  "end_datetime": "2025-06-09T15:00:00",
+  "description": "Discuss project updates",
+  "location": "Conference Room A",
+  "attendees": [{{"email": "john@company.com", "name": "John Smith"}}],
+  "all_day": false,
+  "recurrence_rule": "FREQ=WEEKLY;BYDAY=MO",
+  "reminder_minutes": [15, 60],
+  "add_meet": false,
+  "calendar_name": "primary",
+  "visibility": "default",
+  "color_id": 1,
+  "busy_status": "busy",
+  "guests_can_modify": false,
+  "guests_can_invite_others": true,
+  "guests_can_see_other_guests": true,
+  "needs_clarification": false,
+  "clarification_question": ""
+}}
+
+Return ONLY the JSON response."""
+
+        try:
+            response = self.llm_client.get_completion(prompt, model="gpt-4")
+            result = json.loads(response)
+
+            # Ensure default values for required fields
+            result.setdefault("summary", "")
+            result.setdefault("start_datetime", "")
+            result.setdefault("end_datetime", "")
+            result.setdefault("all_day", False)
+            result.setdefault("needs_clarification", False)
+            result.setdefault("clarification_question", "")
+            result.setdefault("calendar_name", "primary")
+            result.setdefault("reminder_minutes", [15])
+            result.setdefault("add_meet", False)
+            result.setdefault("visibility", "default")
+            result.setdefault("busy_status", "busy")
+            result.setdefault("guests_can_modify", False)
+            result.setdefault("guests_can_invite_others", True)
+            result.setdefault("guests_can_see_other_guests", True)
+
+            # Auto-generate end time if missing but start time exists
+            if result.get("start_datetime") and not result.get("end_datetime"):
+                try:
+                    start_dt = datetime.fromisoformat(
+                        result["start_datetime"].replace("Z", "+00:00")
+                    )
+                    if result.get("all_day"):
+                        # All day events end at 23:59:59 of the same day
+                        end_dt = start_dt.replace(hour=23, minute=59, second=59)
+                    else:
+                        # Regular events default to 1 hour
+                        end_dt = start_dt + timedelta(hours=1)
+                    result["end_datetime"] = end_dt.isoformat()
+                    self.logger.info(
+                        f"Auto-generated 1-hour duration: {result['start_datetime']} -> {result['end_datetime']}"
+                    )
+                except Exception as e:
+                    self.logger.warning(f"Could not auto-generate end time: {e}")
+
+            # Force 1-hour duration if both times exist but are the same
+            if (
+                result.get("start_datetime")
+                and result.get("end_datetime")
+                and result["start_datetime"] == result["end_datetime"]
+            ):
+                try:
+                    start_dt = datetime.fromisoformat(
+                        result["start_datetime"].replace("Z", "+00:00")
+                    )
+                    end_dt = start_dt + timedelta(hours=1)
+                    result["end_datetime"] = end_dt.isoformat()
+                    self.logger.info(f"Fixed same start/end times to 1-hour duration")
+                except Exception as e:
+                    self.logger.warning(f"Could not fix same start/end times: {e}")
+
+            return result
+
+        except (json.JSONDecodeError, Exception) as e:
+            self.logger.error(f"Event extraction error: {e}")
+            return {
+                "summary": "",
+                "start_datetime": "",
+                "end_datetime": "",
+                "needs_clarification": True,
+                "clarification_question": "Could you provide more details about the event, including the title and when you'd like to schedule it?",
+            }
+
+    def _generate_event_creation_response(
+        self, created_event: Dict[str, Any], original_query: str
+    ) -> str:
+        """Generate a conversational response for successful event creation"""
+
+        try:
+            summary = created_event.get("summary", "Event")
+            start_time = created_event.get("start", {}).get("dateTime", "")
+            location = created_event.get("location", "")
+            calendar_name = created_event.get("calendar_name", "")
+
+            # Parse start time for friendly display
+            time_display = ""
+            if start_time:
+                try:
+                    dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+                    time_display = dt.strftime("%A, %B %d at %I:%M %p")
+                except:
+                    time_display = start_time
+
+            # Build response
+            response_parts = [f"✅ I've successfully created your event: **{summary}**"]
+
+            if time_display:
+                response_parts.append(f"📅 Scheduled for {time_display}")
+
+            if location:
+                response_parts.append(f"📍 Location: {location}")
+
+            # Add calendar info if not primary
+            if calendar_name and calendar_name != "primary":
+                response_parts.append(f"📋 Added to your **{calendar_name}** calendar")
+
+            # Add helpful note
+            response_parts.append("\nThe event has been added to your Google Calendar!")
+
+            return "\n".join(response_parts)
+
+        except Exception as e:
+            self.logger.error(f"Error generating creation response: {e}")
+            return f"✅ I've successfully created your event! Check your Google Calendar to see the details."
+
+    def _resolve_calendar_name_to_id(self, service, calendar_name: str) -> str:
+        """Resolve a calendar name to calendar ID"""
+
+        # If it's already "primary" or looks like a calendar ID, return as-is
+        if calendar_name == "primary" or "@" in calendar_name:
+            return calendar_name
+
+        try:
+            # Get user's calendar list
+            calendar_list = service.calendarList().list().execute()
+            calendars = calendar_list.get("items", [])
+
+            # First try exact name match (case insensitive)
+            calendar_name_lower = calendar_name.lower()
+            for calendar in calendars:
+                calendar_summary = calendar.get("summary", "").lower()
+                calendar_summary_override = calendar.get("summaryOverride", "").lower()
+
+                if (
+                    calendar_summary == calendar_name_lower
+                    or calendar_summary_override == calendar_name_lower
+                ):
+                    self.logger.info(
+                        f"Found exact calendar match: '{calendar_name}' -> {calendar['id']}"
+                    )
+                    return calendar["id"]
+
+            # Then try partial match (contains)
+            for calendar in calendars:
+                calendar_summary = calendar.get("summary", "").lower()
+                calendar_summary_override = calendar.get("summaryOverride", "").lower()
+
+                if (
+                    calendar_name_lower in calendar_summary
+                    or calendar_name_lower in calendar_summary_override
+                ):
+                    self.logger.info(
+                        f"Found partial calendar match: '{calendar_name}' -> {calendar['id']}"
+                    )
+                    return calendar["id"]
+
+            # If no match found, use primary
+            self.logger.warning(f"Calendar '{calendar_name}' not found, using primary")
+            return "primary"
+
+        except Exception as e:
+            self.logger.error(f"Error resolving calendar name '{calendar_name}': {e}")
+            return "primary"
+
 
 # Test function for the 15 query categories
 def test_enhanced_prompts():
@@ -1089,6 +1545,12 @@ def test_enhanced_prompts():
         "When is my next workout?",
         # Category 4: Complex Contextual Queries
         "What meetings do I have with my manager this week?",
+        # Category 5: Event Creation Queries
+        "Schedule a meeting with John tomorrow at 2pm",
+        "Book a dentist appointment for next Friday at 10am",
+        "Add lunch with Sarah to my calendar for tomorrow at noon",
+        "Create a daily standup meeting at 9am starting Monday",
+        "Set up an all-day conference event for next week",
     ]
 
     try:
