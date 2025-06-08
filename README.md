@@ -10,7 +10,9 @@ A sophisticated AI-powered calendar assistant that integrates directly into Goog
 - **📊 Smart Filtering**: Only queries visible calendars (60-90% API call reduction)
 - **⚡ Incremental Search**: Month-by-month search with early termination
 - **💬 Conversation Context**: Maintains context across multiple messages
-- **📝 Bullet Point Responses**: Clean, readable formatting
+- **📝 Rich Message Formatting**: Bullet points, bold text, and clean visual hierarchy
+- **📅 Calendar-Specific Creation**: Create events on specific calendars ("add to my jetski calendar")
+- **👥 Advanced Event Features**: Attendees, Google Meet, recurrence, reminders, colors
 - **🎨 Material Design**: Matches Google Calendar's native look and feel
 
 ## 🚀 Quick Start
@@ -96,10 +98,18 @@ Once set up, you can ask ORII questions like:
 - "Show dental appointments"
 - "Meetings with john@company.com"
 
-**Calendar-specific:**
+**Calendar-specific queries:**
 
 - "What's in my UCI calendar today?"
 - "Show work meetings this week"
+
+**Event creation:**
+
+- "Add a block to my jetski calendar at 2pm today"
+- "Schedule team meeting tomorrow 10am with Google Meet"
+- "Create lunch with john@company.com and sarah@email.com next Friday"
+- "Add daily standup every weekday at 9am for 4 weeks"
+- "Schedule private meeting with CEO, don't show other guests"
 
 ## 🏗️ Architecture
 
@@ -118,11 +128,13 @@ Once set up, you can ask ORII questions like:
 
 ### AI Pipeline
 
-1. **Intent Classification**: Determines query type
+1. **Intent Classification**: Determines query type (fetch, create, update, delete)
 2. **Time Extraction**: Parses temporal expressions
 3. **Semantic Matching**: Finds events by meaning
-4. **Smart Filtering**: Only queries visible calendars
-5. **Response Generation**: Conversational, formatted responses
+4. **Calendar Resolution**: Maps calendar names to IDs
+5. **Event Creation**: Comprehensive Google Calendar field support
+6. **Smart Filtering**: Only queries visible calendars
+7. **Response Generation**: Conversational, formatted responses with rich formatting
 
 ## 🔍 Smart Calendar Filtering
 
@@ -131,6 +143,35 @@ ORII automatically detects which calendars are visible in your Google Calendar U
 - **62.5% fewer API calls** on average
 - **Faster response times**
 - **Accurate calendar targeting**
+
+## 📅 Advanced Event Creation
+
+ORII supports comprehensive event creation with all Google Calendar features:
+
+### Calendar Selection
+
+- **Natural Language**: "add to my jetski calendar", "schedule on work calendar"
+- **Smart Matching**: Exact and partial calendar name matching
+- **Fallback**: Uses primary calendar if specified calendar not found
+
+### Event Features
+
+- **👥 Attendees**: Email addresses, names, or mixed formats
+- **🎥 Google Meet**: Automatic video conferencing integration
+- **🔄 Recurrence**: Daily, weekly, monthly with complex patterns
+- **⏰ Reminders**: Multiple reminders (15min, 1hr, 1day, etc.)
+- **🎨 Colors**: 11 colors based on event type or user preference
+- **🔒 Privacy**: Default, public, private, confidential visibility
+- **📍 Location**: Physical addresses or virtual meeting rooms
+
+### Example Commands
+
+```
+"Add team standup to my work calendar every weekday at 9am"
+"Schedule lunch with john@company.com tomorrow at noon with Google Meet"
+"Create private meeting with CEO next Friday, don't show other guests"
+"Add vacation day to travel calendar next Monday all day"
+```
 
 ## 🛠️ Development
 
@@ -181,7 +222,17 @@ The system includes comprehensive testing categories:
 **General Queries** (4): Basic chat, system questions  
 **Time-based** (5): Today, tomorrow, next week, etc.  
 **Semantic** (5): Therapy sessions, workouts, dentist, etc.  
-**Complex** (1): Multi-parameter queries
+**Complex** (1): Multi-parameter queries  
+**Event Creation** (5): Calendar-specific creation, attendees, Meet links  
+**Message Formatting** (3): Bullet points, bold text, HTML rendering
+
+```bash
+# Run comprehensive tests
+python test_calendar_and_formatting.py
+
+# Test specific features
+python -c "from test_calendar_and_formatting import test_calendar_specific_event_creation; test_calendar_specific_event_creation()"
+```
 
 ## 🐛 Troubleshooting
 
@@ -208,6 +259,8 @@ The system includes comprehensive testing categories:
 - **Caching**: 5-minute event cache to reduce API calls
 - **Incremental Search**: Month-by-month with early termination
 - **Smart Filtering**: Only visible calendars
+- **Calendar Resolution**: Intelligent name-to-ID mapping with fallbacks
+- **Rich Formatting**: Client-side HTML rendering for better UX
 - **Session Management**: Conversation context preservation
 - **Error Handling**: Graceful degradation on failures
 
