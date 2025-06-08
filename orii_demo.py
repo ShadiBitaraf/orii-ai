@@ -58,7 +58,7 @@ log_file = os.path.join(logs_dir, "orii_demo.log")
 
 # Import the Loguru logger
 try:
-    from backend.app.utils.logger import setup_logger, get_logger
+    from backend.app.utils.logger import get_logger
 
     # Create a logger specific to this module with no console output
     logger = get_logger(name="orii_demo", module="orii_demo")
@@ -404,9 +404,9 @@ def get_intent_response(query, conversation_context=None):
         }
 
 
-# Modified to return response instead of printing to console
+# Enhanced processing using the new prompt strategy
 def process_query(query, conversation_context=None):
-    """Process a query and return the response without printing"""
+    """Process a query using the enhanced prompt engineering strategy"""
     logger.debug(f"process_query called with query: {query}")
 
     if not conversation_context:
@@ -422,31 +422,62 @@ def process_query(query, conversation_context=None):
     # Store in history
     conversation_context["chat_history"].append({"role": "user", "content": query})
 
-    # Get response with conversation context
-    response = get_intent_response(query, conversation_context)
+    try:
+        # Try the enhanced prompt strategy first
+        from backend.app.utils.enhanced_prompts import EnhancedCalendarProcessor
 
-    # Format response
-    formatted_response = format_chatbot_response(response)
-    logger.debug(
-        f"Formatted response: {formatted_response[:100]}..."
-        if len(formatted_response) > 100
-        else formatted_response
-    )
+        processor = EnhancedCalendarProcessor()
+        user_context = {
+            "current_datetime": datetime.now().isoformat(),
+            "timezone": "America/New_York",  # Could be made configurable
+            "chat_history": conversation_context.get("chat_history", []),
+        }
 
-    # Store in history
-    conversation_context["chat_history"].append(
-        {"role": "assistant", "content": formatted_response}
-    )
+        result = processor.process_calendar_query(query, user_context)
 
-    # Update conversation context
-    conversation_context["last_intent"] = response.get("intent_type")
-    conversation_context["last_response"] = response
-    if "time_info" in response:
-        conversation_context["last_time_info"] = response["time_info"]
-    if "date" in response:
-        conversation_context["last_date"] = response["date"]
+        # Use the enhanced response
+        formatted_response = result.response
 
-    return formatted_response, conversation_context
+        # Store in history
+        conversation_context["chat_history"].append(
+            {"role": "assistant", "content": formatted_response}
+        )
+
+        # Update conversation context
+        conversation_context["last_intent"] = result.intent
+        conversation_context["last_response"] = {
+            "intent_type": result.intent,
+            "confidence": result.confidence,
+            "needs_clarification": result.needs_clarification,
+        }
+
+        logger.info(
+            f"Enhanced processing: {result.intent} (confidence: {result.confidence})"
+        )
+
+        return formatted_response, conversation_context
+
+    except Exception as e:
+        logger.warning(f"Enhanced processing failed, falling back to legacy: {e}")
+
+        # Fallback to original processing method
+        response = get_intent_response(query, conversation_context)
+        formatted_response = format_chatbot_response(response)
+
+        # Store in history
+        conversation_context["chat_history"].append(
+            {"role": "assistant", "content": formatted_response}
+        )
+
+        # Update conversation context
+        conversation_context["last_intent"] = response.get("intent_type")
+        conversation_context["last_response"] = response
+        if "time_info" in response:
+            conversation_context["last_time_info"] = response["time_info"]
+        if "date" in response:
+            conversation_context["last_date"] = response["date"]
+
+        return formatted_response, conversation_context
 
 
 def simulate_typing(text):
