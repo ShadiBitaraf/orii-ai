@@ -23,9 +23,12 @@ var/
 # Virtual Environment
 venv/
 ENV/
+env/
 
 # Environment Variables
 .env
+.env.local
+.env.*.local
 
 # IDE
 .idea/
@@ -37,19 +40,49 @@ ENV/
 .coverage
 htmlcov/
 .pytest_cache/
+.tox/
 
 # Database
 *.db
+*.sqlite
+*.sqlite3
 backend/test.db
 
 # Logs
 *.log
+logs/
 
 # Google API credentials and tokens
 credentials.json
 token.json
 **/credentials.json
 **/token.json
+service_account.json
 
 # macOS
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Chrome Extension Development
+frontend/interfaces/extension/node_modules/
+frontend/interfaces/extension/dist/
+frontend/interfaces/extension/*.zip
+frontend/interfaces/extension/*.crx
+frontend/interfaces/extension/*.pem
+
+# Debug files
+debug_*.py
+test_*.py
+*_debug.py
+*_test.py
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
