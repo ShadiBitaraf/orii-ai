@@ -22,7 +22,22 @@ except Exception as e:
     print(f"⚠️  Error loading .env file: {e}")
 
 # Import the modified orii_demo functions
-from orii_demo import process_query, get_logs_path
+try:
+    from orii_demo import process_query, get_logs_path
+
+    ORII_DEMO_AVAILABLE = True
+    print("✅ orii_demo module imported successfully")
+except ImportError as e:
+    print(f"⚠️  orii_demo not available: {e}")
+    ORII_DEMO_AVAILABLE = False
+
+    # Fallback functions
+    def process_query(query, context):
+        return "🚧 ORII Demo module not available. Please check deployment.", {}
+
+    def get_logs_path():
+        return "/tmp/fallback.log"
+
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -134,7 +149,15 @@ def save_conversation_context(
 @app.route("/")
 def index():
     """Render the main chat interface"""
-    return render_template("index.html")
+    try:
+        return render_template("index.html")
+    except Exception as e:
+        return f"""
+        <h1>🚀 ORII Calendar Assistant</h1>
+        <p>✅ Server is running successfully!</p>
+        <p>⚠️ Template error: {str(e)}</p>
+        <p>🔗 Try: <a href="/health">/health</a> | <a href="/install">/install</a></p>
+        """
 
 
 @app.route("/admin")
@@ -146,7 +169,33 @@ def admin():
 @app.route("/install")
 def install_page():
     """Render the extension installation page"""
-    return render_template("install.html")
+    try:
+        return render_template("install.html")
+    except Exception as e:
+        return f"""
+        <h1>📥 ORII Extension Installation</h1>
+        <p>⚠️ Template error: {str(e)}</p>
+        <p>🔗 Try: <a href="/health">/health</a> | <a href="/">/</a></p>
+        <p>📦 Extension files should be available at: <a href="/static/orii-extension-v1.0.0.crx">Download CRX</a></p>
+        """
+
+
+@app.route("/health")
+def health_check():
+    """Health check endpoint for Railway"""
+    return jsonify(
+        {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "orii_demo_available": ORII_DEMO_AVAILABLE,
+            "enhanced_storage_available": ENHANCED_STORAGE_AVAILABLE,
+            "context_backend": (
+                CONTEXT_BACKEND if ENHANCED_STORAGE_AVAILABLE else "memory"
+            ),
+            "port": os.getenv("PORT", "8080"),
+            "environment": "production" if not os.getenv("DEBUG") else "development",
+        }
+    )
 
 
 @app.route("/api/query", methods=["POST"])
