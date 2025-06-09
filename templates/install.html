@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Install ORII Calendar Assistant</title>
+    <style>
+      body {
+        font-family: "Google Sans", "Roboto", Arial, sans-serif;
+        max-width: 900px;
+        margin: 50px auto;
+        padding: 20px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+      }
+      .container {
+        background-color: white;
+        padding: 40px;
+        border-radius: 16px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+      }
+      h1 {
+        color: #1a73e8;
+        text-align: center;
+        margin-bottom: 30px;
+        font-size: 2.5em;
+      }
+      .hero {
+        text-align: center;
+        margin-bottom: 40px;
+      }
+      .download-btn {
+        background: linear-gradient(135deg, #1a73e8, #4285f4);
+        color: white;
+        padding: 15px 30px;
+        border: none;
+        border-radius: 8px;
+        font-size: 18px;
+        font-weight: 500;
+        cursor: pointer;
+        text-decoration: none;
+        display: inline-block;
+        margin: 10px;
+        transition: transform 0.2s;
+      }
+      .download-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(26, 115, 232, 0.3);
+      }
+      .steps {
+        margin: 30px 0;
+      }
+      .step {
+        display: flex;
+        align-items: flex-start;
+        margin: 20px 0;
+        padding: 15px;
+        background: #f8f9fa;
+        border-radius: 8px;
+      }
+      .step-number {
+        background: #1a73e8;
+        color: white;
+        border-radius: 50%;
+        width: 30px;
+        height: 30px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-right: 15px;
+        font-weight: bold;
+        flex-shrink: 0;
+      }
+      .features {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 20px;
+        margin: 30px 0;
+      }
+      .feature {
+        padding: 20px;
+        background: #f8f9fa;
+        border-radius: 8px;
+        text-align: center;
+      }
+      .feature-icon {
+        font-size: 2em;
+        margin-bottom: 10px;
+      }
+      .warning {
+        background: #fff3cd;
+        border: 1px solid #ffeaa7;
+        padding: 15px;
+        border-radius: 8px;
+        margin: 20px 0;
+      }
+      .success {
+        background: #d4edda;
+        border: 1px solid #c3e6cb;
+        padding: 15px;
+        border-radius: 8px;
+        margin: 20px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>🗓️ ORII Calendar Assistant</h1>
+
+      <div class="hero">
+        <p style="font-size: 1.2em; color: #5f6368; margin-bottom: 30px">
+          AI-powered calendar assistant that integrates directly into Google
+          Calendar
+        </p>
+
+        <div class="features">
+          <div class="feature">
+            <div class="feature-icon">🧠</div>
+            <h3>Smart Context</h3>
+            <p>Remembers your conversations for natural follow-up questions</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">⚡</div>
+            <h3>Lightning Fast</h3>
+            <p>2-12x faster search performance with optimized queries</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">🔍</div>
+            <h3>Semantic Search</h3>
+            <p>Find events by natural language: "my last therapy session"</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="success">
+        <strong>✅ Ready to Install!</strong> This extension connects to our
+        live API - no additional setup required.
+      </div>
+
+      <div style="text-align: center; margin: 30px 0">
+        <a
+          href="/static/orii-extension-v1.0.0.crx"
+          class="download-btn"
+          download
+        >
+          📥 Download ORII Extension (.crx)
+        </a>
+        <br />
+        <a
+          href="/static/orii-extension-v1.0.0.zip"
+          class="download-btn"
+          download
+          style="background: #5f6368; margin-top: 10px"
+        >
+          📦 Download ZIP (Alternative)
+        </a>
+      </div>
+
+      <div class="steps">
+        <h2>📋 Installation Steps</h2>
+
+        <div class="step">
+          <div class="step-number">1</div>
+          <div>
+            <strong>Download Extension</strong><br />
+            Click the download button above to get the ORII extension (.crx file
+            preferred).
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-number">2</div>
+          <div>
+            <strong>Open Chrome Extensions</strong><br />
+            Go to <code>chrome://extensions/</code> in your Chrome browser.
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-number">3</div>
+          <div>
+            <strong>Enable Developer Mode</strong><br />
+            Turn ON the "Developer mode" toggle in the top right corner.
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-number">4</div>
+          <div>
+            <strong>Install Extension</strong><br />
+            <strong>Method A (CRX):</strong> Drag and drop the .crx file onto
+            the extensions page.<br />
+            <strong>Method B (ZIP):</strong> Extract ZIP, then click "Load
+            unpacked" and select folder.
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-number">5</div>
+          <div>
+            <strong>Start Using ORII</strong><br />
+            Go to
+            <a href="https://calendar.google.com" target="_blank"
+              >Google Calendar</a
+            >
+            and look for the ORII button in the right sidebar!
+          </div>
+        </div>
+      </div>
+
+      <div class="warning">
+        <strong>⚠️ Note:</strong> You'll need to manually update the extension
+        when new versions are released. We're working on Chrome Web Store
+        availability for automatic updates!
+      </div>
+
+      <div style="text-align: center; margin-top: 40px; color: #5f6368">
+        <p>
+          Having issues?
+          <a
+            href="https://github.com/ShadiBitaraf/orii-ai/issues"
+            target="_blank"
+            >Report a bug</a
+          >
+        </p>
+        <p>Powered by AI • Built with ❤️</p>
+      </div>
+    </div>
+  </body>
+</html>

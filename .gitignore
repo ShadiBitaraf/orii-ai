@@ -86,5 +86,9 @@ test_*.py
 *.temp
 temp/
 tmp/
+
+# Context storage (local development only)
 context_cache/
-.env
+
+# Security - Extension signing keys  
+*.pem

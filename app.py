@@ -143,6 +143,12 @@ def admin():
     return render_template("admin.html")
 
 
+@app.route("/install")
+def install_page():
+    """Render the extension installation page"""
+    return render_template("install.html")
+
+
 @app.route("/api/query", methods=["POST"])
 def api_query():
     """API endpoint to process a query with enhanced context storage"""
@@ -330,10 +336,10 @@ if __name__ == "__main__":
         f"🔢 Max Queries per Session: {MAX_QUERIES_PER_SESSION if ENHANCED_STORAGE_AVAILABLE else 'unlimited'}"
     )
 
-    #app.run(debug=True, port=5001)
     # Railway deployment configuration
-    port = int(os.getenv("PORT", 5001))  # Railway sets PORT env var
+    port = int(os.getenv("PORT", 8080))  # Railway typically uses 8080
     host = "0.0.0.0"  # Bind to all interfaces for Railway
 
     print(f"🌐 Server starting on {host}:{port}")
-    app.run(debug=False, host=host, port=port)
+    print(f"🚀 ORII Calendar Assistant ready!")
+    app.run(debug=False, host=host, port=port, threaded=True)
