@@ -183,6 +183,29 @@ def install_page():
 @app.route("/health")
 def health_check():
     """Health check endpoint for Railway"""
+    # Check file system
+    templates_exist = os.path.exists("templates")
+    static_exist = os.path.exists("static")
+    install_template_exist = os.path.exists("templates/install.html")
+
+    files_info = {
+        "templates_dir": templates_exist,
+        "static_dir": static_exist,
+        "install_template": install_template_exist,
+    }
+
+    if templates_exist:
+        try:
+            files_info["template_files"] = os.listdir("templates")
+        except:
+            files_info["template_files"] = "error_reading"
+
+    if static_exist:
+        try:
+            files_info["static_files"] = os.listdir("static")
+        except:
+            files_info["static_files"] = "error_reading"
+
     return jsonify(
         {
             "status": "healthy",
@@ -194,8 +217,30 @@ def health_check():
             ),
             "port": os.getenv("PORT", "8080"),
             "environment": "production" if not os.getenv("DEBUG") else "development",
+            "files": files_info,
         }
     )
+
+
+@app.route("/debug/routes")
+def debug_routes():
+    """Debug endpoint to show all registered routes"""
+    routes = []
+    for rule in app.url_map.iter_rules():
+        routes.append(
+            {
+                "endpoint": rule.endpoint,
+                "methods": list(rule.methods),
+                "rule": str(rule),
+            }
+        )
+    return jsonify({"status": "debug", "total_routes": len(routes), "routes": routes})
+
+
+@app.route("/test")
+def test_route():
+    """Simple test route that doesn't need templates"""
+    return "<h1>✅ Test route works!</h1><p><a href='/health'>Health</a> | <a href='/debug/routes'>Routes</a> | <a href='/install'>Install</a></p>"
 
 
 @app.route("/api/query", methods=["POST"])
