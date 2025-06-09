@@ -166,20 +166,6 @@ def admin():
     return render_template("admin.html")
 
 
-@app.route("/install")
-def install_page():
-    """Render the extension installation page"""
-    try:
-        return render_template("install.html")
-    except Exception as e:
-        return f"""
-        <h1>📥 ORII Extension Installation</h1>
-        <p>⚠️ Template error: {str(e)}</p>
-        <p>🔗 Try: <a href="/health">/health</a> | <a href="/">/</a></p>
-        <p>📦 Extension files should be available at: <a href="/static/orii-extension-v1.0.0.crx">Download CRX</a></p>
-        """
-
-
 @app.route("/health")
 def health_check():
     """Health check endpoint for Railway"""
@@ -220,6 +206,24 @@ def health_check():
             "files": files_info,
         }
     )
+
+
+@app.route("/install")
+def install_page():
+    """Render the extension installation page - SIMPLIFIED VERSION"""
+    return """
+    <h1>📥 ORII Extension Installation</h1>
+    <p>✅ Install route is working!</p>
+    <p>📦 <a href="/static/orii-extension-v1.0.0.crx">Download Extension (CRX)</a></p>
+    <p>🔗 <a href="/health">Health Check</a></p>
+    <p>⚙️ This is a simplified version - templates will be restored once this works.</p>
+    """
+
+
+@app.route("/install2")
+def install_test():
+    """Test route to check if routing works"""
+    return "<h1>✅ Install2 route works!</h1><p><a href='/health'>Health</a> | <a href='/install'>Install</a></p>"
 
 
 @app.route("/debug/routes")
