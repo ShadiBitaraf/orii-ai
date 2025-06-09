@@ -1,0 +1,27 @@
+# Virtual environment
+venv/
+env/
+
+# Cache directories
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Development files
+.env
+.DS_Store
+*.log
+
+# Context cache (will use Redis in production)
+context_cache/
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+V0_context.txt
+
+# Test files
+test_*.py 
