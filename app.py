@@ -240,7 +240,25 @@ def debug_routes():
 @app.route("/test")
 def test_route():
     """Simple test route that doesn't need templates"""
-    return "<h1>✅ Test route works!</h1><p><a href='/health'>Health</a> | <a href='/debug/routes'>Routes</a> | <a href='/install'>Install</a></p>"
+    return "<h1>✅ Test route works!</h1><p><a href='/health'>Health</a> | <a href='/routes'>Routes</a> | <a href='/install'>Install</a></p>"
+
+
+@app.route("/routes")
+def simple_debug_routes():
+    """Simple debug endpoint to show all registered routes"""
+    try:
+        routes = []
+        for rule in app.url_map.iter_rules():
+            routes.append(f"{rule.methods} {rule.rule} -> {rule.endpoint}")
+
+        html = "<h1>🔍 Registered Routes</h1><ul>"
+        for route in routes:
+            html += f"<li>{route}</li>"
+        html += "</ul>"
+        html += "<p><a href='/health'>Health</a> | <a href='/test'>Test</a></p>"
+        return html
+    except Exception as e:
+        return f"<h1>❌ Error listing routes</h1><p>{str(e)}</p>"
 
 
 @app.route("/api/query", methods=["POST"])
