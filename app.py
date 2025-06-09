@@ -330,4 +330,10 @@ if __name__ == "__main__":
         f"🔢 Max Queries per Session: {MAX_QUERIES_PER_SESSION if ENHANCED_STORAGE_AVAILABLE else 'unlimited'}"
     )
 
-    app.run(debug=True, port=5001)
+    #app.run(debug=True, port=5001)
+    # Railway deployment configuration
+    port = int(os.getenv("PORT", 5001))  # Railway sets PORT env var
+    host = "0.0.0.0"  # Bind to all interfaces for Railway
+
+    print(f"🌐 Server starting on {host}:{port}")
+    app.run(debug=False, host=host, port=port)
