@@ -187,8 +187,57 @@ class EnhancedCalendarProcessor:
         original_context: str,
         confidence: float,
     ) -> QueryResult:
-        """Handle follow-up queries that provide additional context"""
-        # Reconstruct the original query with the new context
+        """Handle follow-up queries that provide additional context with improved context awareness"""
+
+        # **ENHANCED CONTEXT ANALYSIS** - Check if this is asking for details about previous results
+        chat_history = user_context.get("chat_history", [])
+        query_lower = user_query.lower()
+
+        # Look for detail-seeking patterns
+        detail_patterns = [
+            "details",
+            "more info",
+            "tell me more",
+            "what about",
+            "about the",
+            "grad prep",
+            "therapy",
+            "meeting",
+            "appointment",
+            "event",
+        ]
+
+        # Check if user is asking for details about something mentioned in recent conversation
+        if len(chat_history) >= 2:
+            last_assistant_response = ""
+            for msg in reversed(chat_history):
+                if msg["role"] == "assistant":
+                    last_assistant_response = msg["content"].lower()
+                    break
+
+            # If the last response mentioned events and user is asking for details
+            if any(pattern in query_lower for pattern in detail_patterns):
+                # Check if the query term was mentioned in the last response
+                query_terms = user_query.lower().split()
+                for term in query_terms:
+                    if len(term) > 3 and term in last_assistant_response:
+                        # This looks like a detail request about a previously found event
+                        clarification = f"I see you're asking about '{user_query}' which was mentioned in our previous conversation. Could you be more specific about what details you'd like to know? For example:\n"
+                        clarification += "• What time is it scheduled?\n"
+                        clarification += "• Where is it located?\n"
+                        clarification += "• Who else is attending?\n"
+                        clarification += "• Any other specific details?"
+
+                        return QueryResult(
+                            intent="CLARIFICATION_NEEDED",
+                            response=clarification,
+                            events=[],
+                            confidence=confidence,
+                            needs_clarification=True,
+                            clarification_question=clarification,
+                        )
+
+        # **ORIGINAL LOGIC** - Reconstruct the original query with the new context
         enhanced_query = f"{original_context} {user_query}"
 
         # Re-classify the enhanced query to determine if it's time-based or semantic
@@ -197,24 +246,33 @@ class EnhancedCalendarProcessor:
 
         intent_result = self.classify_intent(enhanced_query, enhanced_context)
         new_intent = intent_result.get("intent", "FETCH_EVENTS_SEMANTIC")
-        time_direction = intent_result.get(
-            "time_direction", user_context.get("time_direction", "present")
-        )
+        time_direction = intent_result.get("time_direction", "present")
 
         # Update context with new time direction
-        user_context["time_direction"] = time_direction
+        enhanced_context["time_direction"] = time_direction
 
-        self.logger.info(
-            f"Follow-up query enhanced: '{enhanced_query}' -> {new_intent} ({time_direction})"
-        )
-
-        # Route to appropriate handler
+        # Process based on the new intent
         if new_intent == "FETCH_EVENTS_TIME":
             return self._handle_time_based_query(
-                enhanced_query, user_context, confidence
+                enhanced_query, enhanced_context, confidence
+            )
+        elif new_intent == "FETCH_EVENTS_SEMANTIC":
+            return self._handle_semantic_query(
+                enhanced_query, enhanced_context, confidence
             )
         else:
-            return self._handle_semantic_query(enhanced_query, user_context, confidence)
+            # For other intents, provide a clarification
+            clarification = self.request_clarification(
+                enhanced_query, "followup_unclear"
+            )
+            return QueryResult(
+                intent="CLARIFICATION_NEEDED",
+                response=clarification,
+                events=[],
+                confidence=confidence,
+                needs_clarification=True,
+                clarification_question=clarification,
+            )
 
     def _handle_create_event_query(
         self, user_query: str, user_context: Dict, confidence: float
@@ -802,7 +860,7 @@ Return ONLY the JSON response."""
     def semantic_event_matching(
         self, user_query: str, calendar_events: List[Dict], user_context: Dict
     ) -> Dict:
-        """PROMPT 3: Semantic Event Matching"""
+        """PROMPT 3: Semantic Event Matching with enhanced airport code support"""
 
         user_timezone = user_context.get("timezone", "UTC")
         current_date = user_context.get("current_datetime", datetime.now().isoformat())
@@ -830,6 +888,29 @@ Semantic matching guidelines:
 - "dinner" matches: "Dinner with X", "Restaurant", "Meal with", "Eating out"
 - "meeting with [person]" matches: events where that person is an attendee or mentioned
 
+**ENHANCED AIRPORT/FLIGHT MATCHING:**
+- "sfo" matches: "San Francisco", "SFO", "San Francisco International", "SF", "Bay Area"
+- "lax" matches: "Los Angeles", "LAX", "LA", "Los Angeles International"
+- "flight" matches: "Flight", "airline", flight numbers like "F9 4593", "Delta 1234", "United 567"
+- "trip to [city]" matches: events with that city name, airport codes, or travel-related terms
+- Airport codes (3-letter): automatically expand to full city names for matching
+
+**COMMON AIRPORT CODE EXPANSIONS:**
+- SFO → San Francisco, SF, Bay Area
+- LAX → Los Angeles, LA
+- JFK → New York, NYC, Kennedy
+- ORD → Chicago, Chi
+- DFW → Dallas, Texas
+- ATL → Atlanta, Georgia
+- DEN → Denver, Colorado
+- SEA → Seattle, Washington
+- MIA → Miami, Florida
+- BOS → Boston, Massachusetts
+
+**FLIGHT NUMBER PATTERNS:**
+- Look for patterns like: [A-Z][A-Z]?[0-9]+, flight numbers, airline codes
+- Match "F9 4593" type patterns in event titles/descriptions
+
 Return a JSON response:
 {{
   "matches": [
@@ -838,7 +919,7 @@ Return a JSON response:
       "title": "Event Title",
       "start_time": "2025-06-08T15:00:00",
       "confidence": 0.95,
-      "match_reason": "Event title contains 'Dr. Smith' which semantically matches 'therapy session'"
+      "match_reason": "Event title contains 'San Francisco' which matches airport code 'SFO' in query"
     }}
   ],
   "total_matches": 1
@@ -1117,7 +1198,7 @@ I have access to your Google Calendar and can understand natural language querie
         search_type: str,
         target_calendars: List[Dict],
     ) -> List[Dict]:
-        """Perform smart month-by-month search until events found or 1 year reached"""
+        """Perform smart month-by-month search with early termination and confidence-based stopping"""
         if not self.calendar_available or not target_calendars:
             return []
 
@@ -1129,13 +1210,42 @@ I have access to your Google Calendar and can understand natural language querie
             now = datetime.now()
             found_events = []
             months_searched = 0
-            max_months = 12  # Search up to 1 year
+
+            # **SMART SEARCH LIMITS** - Prevent excessive searching
+            query_lower = user_query.lower()
+
+            # Determine max months based on query type and specificity
+            if any(
+                term in query_lower
+                for term in ["today", "tomorrow", "this week", "next week"]
+            ):
+                max_months = 1  # Very specific time queries - search only 1 month
+            elif any(
+                term in query_lower
+                for term in ["this month", "next month", "last month"]
+            ):
+                max_months = 2  # Month-specific queries - search 2 months
+            elif any(
+                term in query_lower for term in ["recent", "lately", "soon", "upcoming"]
+            ):
+                max_months = 3  # Recent/upcoming queries - search 3 months
+            elif any(
+                term in query_lower
+                for term in ["last", "previous", "when was", "when is"]
+            ):
+                max_months = 6  # Historical queries - search 6 months
+            else:
+                max_months = 4  # Default for semantic searches - search 4 months
+
+            # **CONFIDENCE TRACKING** - Stop when we find good matches
+            confidence_threshold = 0.8  # High confidence threshold
+            decent_matches = []  # Store medium confidence matches as backup
 
             self.logger.info(
-                f"Starting incremental search: {search_type} in {time_direction} direction"
+                f"Starting smart incremental search: {search_type} in {time_direction} direction (max {max_months} months)"
             )
 
-            while months_searched < max_months and not found_events:
+            while months_searched < max_months:
                 if time_direction == "past":
                     # Search backwards month by month
                     end_date = now - timedelta(days=30 * months_searched)
@@ -1193,10 +1303,36 @@ I have access to your Google Calendar and can understand natural language querie
                             {"current_datetime": now.isoformat(), "timezone": "UTC"},
                         )
                         filtered_events = semantic_matches.get("matches", [])
+
+                        # **CONFIDENCE-BASED EARLY TERMINATION**
+                        high_confidence_matches = [
+                            event
+                            for event in filtered_events
+                            if event.get("confidence", 0) >= confidence_threshold
+                        ]
+
+                        medium_confidence_matches = [
+                            event
+                            for event in filtered_events
+                            if 0.5 <= event.get("confidence", 0) < confidence_threshold
+                        ]
+
+                        if high_confidence_matches:
+                            # Found high confidence matches - stop searching!
+                            found_events = high_confidence_matches
+                            self.logger.info(
+                                f"Found {len(high_confidence_matches)} high-confidence events in {month_name} - stopping search"
+                            )
+                            break
+                        elif medium_confidence_matches:
+                            # Keep medium confidence matches as backup
+                            decent_matches.extend(medium_confidence_matches)
+
                     else:
                         filtered_events = month_events
 
-                    if filtered_events:
+                    # For non-semantic searches, any events found = stop searching
+                    if filtered_events and search_type != "semantic":
                         found_events = filtered_events
                         self.logger.info(
                             f"Found {len(found_events)} events in {month_name}"
@@ -1209,9 +1345,27 @@ I have access to your Google Calendar and can understand natural language querie
                 if time_direction == "present":
                     break
 
-            if not found_events and months_searched >= max_months:
+                # **DIMINISHING RETURNS CHECK** - Stop if we're going too far back/forward
+                if (
+                    months_searched >= 2
+                    and not decent_matches
+                    and search_type == "semantic"
+                ):
+                    self.logger.info(
+                        f"No decent matches found after {months_searched} months - stopping search early"
+                    )
+                    break
+
+            # If no high-confidence matches but we have decent ones, use those
+            if not found_events and decent_matches:
+                found_events = decent_matches[:5]  # Limit to top 5 decent matches
                 self.logger.info(
-                    f"No events found after searching {months_searched} months"
+                    f"Using {len(found_events)} medium-confidence matches as fallback"
+                )
+
+            if not found_events:
+                self.logger.info(
+                    f"No events found after searching {months_searched} months (limit: {max_months})"
                 )
 
             return found_events
