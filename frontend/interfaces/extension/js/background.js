@@ -1,7 +1,7 @@
 // ORII Calendar Assistant - Background Script
 
 // Configuration
-const API_BASE_URL = "orii-ai-production.up.railway.app"; // Update with your Railway URL
+const API_BASE_URL = "https://orii-ai-production.up.railway.app"; // Update with your Railway URL
 // For development: const API_BASE_URL = "http://localhost:5001";
 
 // Store authentication state

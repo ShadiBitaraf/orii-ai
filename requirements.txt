@@ -31,7 +31,7 @@ google-auth-httplib2==0.1.1
 google-api-python-client==2.108.0
 dateparser==1.1.8
 icalendar==6.3.0
-spacy==3.8.4
+# spacy==3.8.4  # Temporarily disabled - not compatible with Python 3.13
 loguru==0.7.2
 
 # CLI dependencies

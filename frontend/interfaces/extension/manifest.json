@@ -17,13 +17,12 @@
   "content_scripts": [
     {
       "matches": ["https://calendar.google.com/*"],
-      "js": ["js/content.js"],
-      "css": ["css/sidebar.css"]
+      "js": ["js/content.js"]
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["sidebar.html", "css/*", "js/*", "images/*"],
+      "resources": ["sidebar.html", "dist/*", "js/*", "images/*"],
       "matches": ["https://calendar.google.com/*"]
     }
   ]

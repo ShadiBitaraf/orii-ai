@@ -5,6 +5,7 @@ initial Flask web interface for future development
 from flask import Flask, request, jsonify, render_template, send_from_directory  # type: ignore
 from flask_cors import CORS  # type: ignore
 import os
+
 import sys
 import json
 import traceback
@@ -176,6 +177,19 @@ def index():
         <h1>🚀 ORII Calendar Assistant</h1>
         <p>✅ Server is running successfully!</p>
         <p>⚠️ Template error: {str(e)}</p>
+        <p>🔗 Try: <a href="/health">/health</a> | <a href="/install">/install</a> | <a href="/chat">/chat</a></p>
+        """
+
+
+@app.route("/chat")
+def chat_interface():
+    """Render the modern chat interface"""
+    try:
+        return send_from_directory("frontend/interfaces/web", "index.html")
+    except Exception as e:
+        return f"""
+        <h1>🗓️ ORII Chat Interface</h1>
+        <p>⚠️ Chat interface error: {str(e)}</p>
         <p>🔗 Try: <a href="/health">/health</a> | <a href="/install">/install</a></p>
         """
 
