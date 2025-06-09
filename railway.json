@@ -9,5 +9,12 @@
     "healthcheckTimeout": 30,
     "restartPolicyType": "on_failure",
     "restartPolicyMaxRetries": 3
+  },
+  "environments": {
+    "production": {
+      "variables": {
+        "PORT": 5001
+      }
+    }
   }
 }
