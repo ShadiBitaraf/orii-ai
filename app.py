@@ -38,6 +38,17 @@ except ImportError as e:
     def get_logs_path():
         return "/tmp/fallback.log"
 
+except Exception as e:
+    print(f"⚠️  Error importing orii_demo: {e}")
+    ORII_DEMO_AVAILABLE = False
+
+    # Fallback functions
+    def process_query(query, context):
+        return f"🚧 ORII Demo error: {str(e)}", {}
+
+    def get_logs_path():
+        return "/tmp/fallback.log"
+
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -48,9 +59,11 @@ try:
 
     # Configuration - you can change these
     CONTEXT_BACKEND = os.getenv(
-        "CONTEXT_BACKEND", "file"
+        "CONTEXT_BACKEND", "redis"  # Default to redis since it's available on Railway
     )  # "file", "redis", "database"
     MAX_QUERIES_PER_SESSION = int(os.getenv("MAX_QUERIES_PER_SESSION", "10"))
+
+    print(f"🔍 DEBUG: Attempting to initialize {CONTEXT_BACKEND} backend...")
 
     # Create context storage instance
     context_storage = create_context_storage(
@@ -65,6 +78,13 @@ try:
 except ImportError as e:
     print(f"⚠️  Enhanced context storage not available, using basic storage: {e}")
     ENHANCED_STORAGE_AVAILABLE = False
+    CONTEXT_BACKEND = "memory"
+    # Fallback to basic in-memory storage
+    conversation_contexts = {}
+except Exception as e:
+    print(f"⚠️  Error initializing {CONTEXT_BACKEND} storage, using basic storage: {e}")
+    ENHANCED_STORAGE_AVAILABLE = False
+    CONTEXT_BACKEND = "memory"
     # Fallback to basic in-memory storage
     conversation_contexts = {}
 
@@ -210,6 +230,9 @@ def health_check():
 
 # Debug checkpoint - this should print during startup
 print("🔍 DEBUG: About to register install routes...")
+print(f"🔍 DEBUG: ENHANCED_STORAGE_AVAILABLE = {ENHANCED_STORAGE_AVAILABLE}")
+print(f"🔍 DEBUG: ORII_DEMO_AVAILABLE = {ORII_DEMO_AVAILABLE}")
+print(f"🔍 DEBUG: CONTEXT_BACKEND = {CONTEXT_BACKEND}")
 
 try:
 
@@ -236,6 +259,7 @@ try:
         <h1>✅ NEW ROUTE WORKING! - {datetime.now().isoformat()}</h1>
         <p>🚀 This route was just added - if you see this, Railway is running the latest code!</p>
         <p>🔗 <a href="/health">Health</a> | <a href="/install">Install</a> | <a href="/install2">Install2</a></p>
+        <p>📊 Backend: {CONTEXT_BACKEND} | Enhanced Storage: {ENHANCED_STORAGE_AVAILABLE}</p>
         """
 
     print("✅ DEBUG: Install routes registered successfully!")
@@ -245,6 +269,18 @@ except Exception as e:
     import traceback
 
     traceback.print_exc()
+
+    # Create fallback routes to ensure something works
+    @app.route("/install")
+    def install_page():
+        return f"<h1>⚠️ Install route (fallback mode)</h1><p>Error: {str(e)}</p><p><a href='/health'>Health</a></p>"
+
+    @app.route("/working")
+    def working_test():
+        return f"<h1>⚠️ Working route (fallback mode)</h1><p>Error: {str(e)}</p><p><a href='/health'>Health</a></p>"
+
+
+print("🔍 DEBUG: Moving to other route registrations...")
 
 
 @app.route("/debug/routes")
