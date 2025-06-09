@@ -208,22 +208,43 @@ def health_check():
     )
 
 
-@app.route("/install")
-def install_page():
-    """Render the extension installation page - SIMPLIFIED VERSION"""
-    return """
-    <h1>📥 ORII Extension Installation</h1>
-    <p>✅ Install route is working!</p>
-    <p>📦 <a href="/static/orii-extension-v1.0.0.crx">Download Extension (CRX)</a></p>
-    <p>🔗 <a href="/health">Health Check</a></p>
-    <p>⚙️ This is a simplified version - templates will be restored once this works.</p>
-    """
+# Debug checkpoint - this should print during startup
+print("🔍 DEBUG: About to register install routes...")
 
+try:
 
-@app.route("/install2")
-def install_test():
-    """Test route to check if routing works"""
-    return "<h1>✅ Install2 route works!</h1><p><a href='/health'>Health</a> | <a href='/install'>Install</a></p>"
+    @app.route("/install")
+    def install_page():
+        """Render the extension installation page - SIMPLIFIED VERSION"""
+        return """
+        <h1>📥 ORII Extension Installation</h1>
+        <p>✅ Install route is working!</p>
+        <p>📦 <a href="/static/orii-extension-v1.0.0.crx">Download Extension (CRX)</a></p>
+        <p>🔗 <a href="/health">Health Check</a></p>
+        <p>⚙️ This is a simplified version - templates will be restored once this works.</p>
+        """
+
+    @app.route("/install2")
+    def install_test():
+        """Test route to check if routing works"""
+        return "<h1>✅ Install2 route works!</h1><p><a href='/health'>Health</a> | <a href='/install'>Install</a></p>"
+
+    @app.route("/working")
+    def working_test():
+        """Test route to check if Railway is running latest code"""
+        return f"""
+        <h1>✅ NEW ROUTE WORKING! - {datetime.now().isoformat()}</h1>
+        <p>🚀 This route was just added - if you see this, Railway is running the latest code!</p>
+        <p>🔗 <a href="/health">Health</a> | <a href="/install">Install</a> | <a href="/install2">Install2</a></p>
+        """
+
+    print("✅ DEBUG: Install routes registered successfully!")
+
+except Exception as e:
+    print(f"❌ DEBUG: Error registering install routes: {e}")
+    import traceback
+
+    traceback.print_exc()
 
 
 @app.route("/debug/routes")
