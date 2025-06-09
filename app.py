@@ -238,13 +238,109 @@ try:
 
     @app.route("/install")
     def install_page():
-        """Render the extension installation page - SIMPLIFIED VERSION"""
+        """Professional extension installation page for end users"""
         return """
-        <h1>📥 ORII Extension Installation</h1>
-        <p>✅ Install route is working!</p>
-        <p>📦 <a href="/static/orii-extension-v1.0.0.crx">Download Extension (CRX)</a></p>
-        <p>🔗 <a href="/health">Health Check</a></p>
-        <p>⚙️ This is a simplified version - templates will be restored once this works.</p>
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Install ORII Calendar Assistant</title>
+            <style>
+                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; line-height: 1.6; background: #f5f5f5; }
+                .container { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                h1 { color: #1a73e8; text-align: center; margin-bottom: 10px; }
+                .subtitle { text-align: center; color: #666; margin-bottom: 30px; font-size: 18px; }
+                .step { background: #f8f9fa; padding: 20px; margin: 20px 0; border-radius: 8px; border-left: 4px solid #1a73e8; }
+                .step h3 { margin-top: 0; color: #1a73e8; }
+                .download-btn { display: inline-block; background: #1a73e8; color: white; padding: 15px 30px; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 20px 0; text-align: center; }
+                .download-btn:hover { background: #1557b0; }
+                .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 6px; margin: 20px 0; }
+                .success { background: #d4edda; border: 1px solid #c3e6cb; padding: 15px; border-radius: 6px; margin: 20px 0; }
+                code { background: #f1f3f4; padding: 2px 6px; border-radius: 3px; font-family: monospace; }
+                .feature { display: flex; align-items: center; margin: 10px 0; }
+                .feature::before { content: "✨"; margin-right: 10px; font-size: 18px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🗓️ ORII Calendar Assistant</h1>
+                <p class="subtitle">AI-powered calendar management directly in Google Calendar</p>
+                
+                <div class="success">
+                    <strong>🎉 Ready to install!</strong> ORII will add an AI assistant to your Google Calendar sidebar.
+                </div>
+
+                <h2>✨ What ORII Does</h2>
+                <div class="feature">Ask natural language questions like "What do I have tomorrow?"</div>
+                <div class="feature">Find events semantically: "When was my last dentist appointment?"</div>
+                <div class="feature">Create events easily: "Schedule lunch with John tomorrow at noon"</div>
+                <div class="feature">Smart search across all your calendars</div>
+                <div class="feature">Remembers conversation context for follow-up questions</div>
+
+                <h2>📋 Installation Steps</h2>
+                
+                <div class="step">
+                    <h3>Step 1: Download the Extension</h3>
+                    <p>Click the button below to download the ORII extension file to your computer.</p>
+                    <a href="/static/orii-extension-v1.0.0.crx" class="download-btn" download>📥 Download ORII Extension</a>
+                </div>
+
+                <div class="step">
+                    <h3>Step 2: Open Chrome Extensions</h3>
+                    <p>In Google Chrome, go to:</p>
+                    <p><code>chrome://extensions/</code></p>
+                    <p>Or click the three dots menu → More tools → Extensions</p>
+                </div>
+
+                <div class="step">
+                    <h3>Step 3: Enable Developer Mode</h3>
+                    <p>Toggle the <strong>"Developer mode"</strong> switch in the top-right corner of the Extensions page.</p>
+                </div>
+
+                <div class="step">
+                    <h3>Step 4: Install the Extension</h3>
+                    <p>Drag and drop the downloaded <code>orii-extension-v1.0.0.crx</code> file onto the Extensions page.</p>
+                    <p><em>Alternative:</em> Click "Load unpacked" and select the extension file.</p>
+                </div>
+
+                <div class="step">
+                    <h3>Step 5: Start Using ORII</h3>
+                    <p>1. Go to <strong>calendar.google.com</strong></p>
+                    <p>2. Look for the <strong>ORII</strong> button in the right sidebar</p>
+                    <p>3. Click it to open the AI chat interface</p>
+                    <p>4. Start asking questions about your calendar!</p>
+                </div>
+
+                <div class="warning">
+                    <strong>⚠️ First Time Setup:</strong> ORII will ask for Google Calendar permissions when you first use it. This allows the AI to read and create events in your calendar.
+                </div>
+
+                <h2>💬 Example Questions to Try</h2>
+                <ul>
+                    <li>"What's on my calendar today?"</li>
+                    <li>"Do I have any meetings tomorrow?"</li>
+                    <li>"When is my next appointment with Dr. Smith?"</li>
+                    <li>"Schedule a team meeting Friday at 2pm"</li>
+                    <li>"Show me all my events this week"</li>
+                    <li>"Find my last therapy session"</li>
+                </ul>
+
+                <h2>🆘 Need Help?</h2>
+                <p>If you encounter any issues:</p>
+                <ul>
+                    <li>Make sure you're using Google Chrome browser</li>
+                    <li>Ensure Developer mode is enabled in Extensions</li>
+                    <li>Try refreshing calendar.google.com after installation</li>
+                    <li>Check that the extension appears in your Chrome extensions list</li>
+                </ul>
+
+                <div class="success">
+                    <strong>🚀 You're all set!</strong> ORII will make managing your calendar as easy as having a conversation.
+                </div>
+            </div>
+        </body>
+        </html>
         """
 
     @app.route("/install2")
