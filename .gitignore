@@ -86,3 +86,5 @@ test_*.py
 *.temp
 temp/
 tmp/
+context_cache/
+.env
