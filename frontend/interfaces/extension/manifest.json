@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ORII Calendar Assistant",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "AI-powered calendar assistant that integrates directly into Google Calendar",
   "action": {
     "default_title": "ORII Calendar Assistant"
@@ -9,7 +9,7 @@
   "permissions": ["activeTab", "storage", "identity"],
   "host_permissions": [
     "https://calendar.google.com/*",
-    "http://localhost:5001/*"
+    "https://*.railway.app/*"
   ],
   "background": {
     "service_worker": "js/background.js"
