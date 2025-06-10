@@ -1,8 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send } from 'lucide-react';
+import { Send, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import Message from './Message';
+
+// Chrome extension types
+declare global {
+  interface Window {
+    chrome?: typeof chrome;
+  }
+}
+
+declare const chrome: any;
 
 interface ChatMessage {
   id: string;
@@ -33,46 +42,9 @@ const ChatBar = () => {
     scrollToBottom();
   }, [messages]);
 
-  // Handle messages from the Chrome extension content script
+  // Initialize side panel
   useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      if (event.data.action === 'queryResponse') {
-        setIsTyping(false);
-        
-        const response = event.data.response;
-        let responseText = '';
-
-        if (response && response.status === 'success') {
-          if (response.data && response.data.response) {
-            responseText = response.data.response;
-          } else if (response.data && typeof response.data === 'string') {
-            responseText = response.data;
-          } else if (response.response) {
-            responseText = response.response;
-          } else {
-            responseText = 'Response received but format was unexpected';
-          }
-        } else {
-          responseText = response?.error || response?.data?.error || 'Unknown error occurred';
-        }
-
-        const aiMessage: ChatMessage = {
-          id: Date.now().toString(),
-          content: responseText,
-          isUser: false,
-          timestamp: new Date()
-        };
-
-        setMessages(prev => [...prev, aiMessage]);
-      }
-
-      if (event.data.action === 'sidebarVisible') {
-        console.log('React ChatBar: Sidebar is now visible!');
-      }
-    };
-
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
+    console.log('ORII Side Panel: Initialized and ready');
   }, []);
 
   const handleSendMessage = async () => {
@@ -90,13 +62,26 @@ const ChatBar = () => {
     setInputValue('');
     setIsTyping(true);
 
-    // Check if we're in Chrome extension environment
-    if (window.parent && window.parent !== window) {
-      // We're in an iframe (Chrome extension)
-      window.parent.postMessage({
+    // Check if we're in Chrome extension environment (side panel)
+    if (typeof chrome !== 'undefined' && chrome.runtime) {
+      // We're in Chrome extension side panel
+      chrome.runtime.sendMessage({
         action: 'processQuery',
-        query: query
-      }, '*');
+        query: query,
+        sessionId: sessionId
+      }, (response) => {
+        setIsTyping(false);
+        
+        const responseText = response?.data?.response || response?.error || 'No response received';
+        const aiMessage: ChatMessage = {
+          id: (Date.now() + 1).toString(),
+          content: responseText,
+          isUser: false,
+          timestamp: new Date()
+        };
+
+        setMessages(prev => [...prev, aiMessage]);
+      });
     } else {
       // We're in standalone mode, call Flask API directly
       try {
@@ -142,16 +127,36 @@ const ChatBar = () => {
     }
   };
 
+  const handleCloseSidebar = () => {
+    // In side panel mode, Chrome handles closing - we can close programmatically
+    if (chrome && chrome.sidePanel) {
+      // Close the side panel (this will work in Chrome 116+)
+      window.close();
+    } else {
+      // Fallback for other environments
+      console.log('Close button clicked - not in side panel environment');
+    }
+  };
+
   return (
     <div className="flex flex-col h-screen max-w-4xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-center py-4 px-6 border-b border-chat-border bg-white/50 backdrop-blur-sm">
+      <div className="flex items-center justify-between py-4 px-6 border-b border-chat-border bg-white/50 backdrop-blur-sm">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-full bg-gradient-to-r from-chat-pink to-chat-yellow flex items-center justify-center">
-            <span className="font-bold text-white font-lg" style={{ textShadow: '2px 2px 4px rgba(0, 0, 0, 0.8)' }}>M</span>
+            <span className="font-bold text-white font-lg font-chango" style={{ textShadow: '2px 2px 4px rgba(0, 0, 0, 0.8)' }}>M</span>
           </div>
           <h1 className="text-lg font-semibold text-foreground">Calendar Assistant</h1>
         </div>
+        <Button
+          onClick={handleCloseSidebar}
+          variant="ghost"
+          size="sm"
+          className="h-8 w-8 p-0 hover:bg-white/20 rounded-full transition-colors"
+          title="Close ORII"
+        >
+          <X className="h-4 w-4 text-gray-600" />
+        </Button>
       </div>
 
       {/* Messages Container */}

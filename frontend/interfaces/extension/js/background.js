@@ -1,18 +1,36 @@
 // ORII Calendar Assistant - Background Script
 
 // Configuration
-const API_BASE_URL = "https://orii-ai-production.up.railway.app"; // Update with your Railway URL
-// For development: const API_BASE_URL = "http://localhost:5001";
+
+const API_BASE_URL = "http://localhost:8000"; // Local development server
+// For production: const API_BASE_URL = "https://orii-ai-production.up.railway.app";
 
 // Store authentication state
 let authToken = null;
 
 // Handle extension installation
-chrome.runtime.onInstalled.addListener((details) => {
+chrome.runtime.onInstalled.addListener(async (details) => {
   console.log("ORII Calendar Assistant installed:", details.reason);
+
+  try {
+    // Set up side panel to open when action icon is clicked
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+    console.log("✅ BACKGROUND: Side panel behavior set");
+
+    // Set up default side panel (works on all sites)
+    await chrome.sidePanel.setOptions({
+      path: "sidebar.html",
+      enabled: true,
+    });
+    console.log("✅ BACKGROUND: Default side panel configured");
+  } catch (error) {
+    console.error("❌ BACKGROUND: Error during installation:", error);
+  }
 });
 
-// Listen for messages from content script
+// Side panel is now globally available - no need for tab-specific logic
+
+// Listen for messages from side panel
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "initializeSidebar") {
     console.log("Initializing sidebar");
@@ -79,13 +97,26 @@ async function processUserQuery(query, sessionId) {
     console.log("🔄 BACKGROUND: Response ok:", response.ok);
 
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || `Server error: ${response.status}`);
+      // Try to get error message, but handle non-JSON responses
+      let errorMessage = `Server error: ${response.status}`;
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.error || errorMessage;
+      } catch (jsonError) {
+        // If it's not JSON, get the text response
+        try {
+          const textResponse = await response.text();
+          errorMessage = textResponse || errorMessage;
+        } catch (textError) {
+          // Keep the default error message
+        }
+      }
+      throw new Error(errorMessage);
     }
 
     const jsonData = await response.json();
     console.log("🔄 BACKGROUND: Parsed JSON data:", jsonData);
-    console.log("🔄 BACKGROUND: Returning to content script");
+    console.log("🔄 BACKGROUND: Returning to side panel");
 
     return jsonData;
   } catch (error) {

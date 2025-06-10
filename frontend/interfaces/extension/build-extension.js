@@ -2,6 +2,10 @@
 
 import fs from "fs";
 import path from "path";
+import { config } from "dotenv";
+
+// Load environment variables from root .env file
+config({ path: "../../../.env" });
 
 console.log("🔧 Building ORII Chrome Extension...");
 
@@ -25,6 +29,33 @@ if (fs.existsSync(distIndexPath)) {
 } else {
   console.error("❌ Could not find dist/index.html - build may have failed");
   process.exit(1);
+}
+
+// Generate manifest.json from template with environment variables
+const manifestTemplatePath = "manifest.template.json";
+const manifestPath = "manifest.json";
+
+if (fs.existsSync(manifestTemplatePath)) {
+  let manifestContent = fs.readFileSync(manifestTemplatePath, "utf8");
+
+  // Replace placeholders with environment variables
+  const googleClientId = process.env.GOOGLE_CLIENT_ID;
+  if (googleClientId) {
+    manifestContent = manifestContent.replace(
+      "{{GOOGLE_CLIENT_ID}}",
+      googleClientId
+    );
+    fs.writeFileSync(manifestPath, manifestContent);
+    console.log(
+      "✅ Generated manifest.json from template with Google Client ID"
+    );
+  } else {
+    console.warn("⚠️  GOOGLE_CLIENT_ID not found in environment variables");
+    console.warn("🔧 Using template as-is - OAuth may not work");
+    fs.writeFileSync(manifestPath, manifestContent);
+  }
+} else {
+  console.error("❌ Could not find manifest.template.json");
 }
 
 console.log("✅ Extension build completed!");
