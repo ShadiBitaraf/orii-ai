@@ -4,14 +4,14 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from sqlalchemy.orm import Session
-from app.database import get_db
-from app.models.oauth_credentials import OAuthCredentials
-from app.models.oauth_state import OAuthState
-from app.utils.security import get_current_user
-from app.models.user import User
+from backend.app.database import get_db
+from backend.app.models.oauth_credentials import OAuthCredentials
+from backend.app.models.oauth_state import OAuthState
+from backend.app.utils.security import get_current_user
+from backend.app.models.user import User
 from datetime import datetime, timedelta, timezone
-from app.core.config import get_settings
-from app.utils.logger import get_logger
+from backend.app.core.config import get_settings
+from backend.app.utils.logger import get_logger
 
 # Initialize settings and logging
 settings = get_settings()

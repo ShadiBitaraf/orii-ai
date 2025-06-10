@@ -2,25 +2,25 @@ from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from datetime import timedelta
+from datetime import timedelta, datetime
 from typing import Any
 
 # import logging
 # import sys
 
-from app.database import Base, engine, get_db
-from app.models import user as models
-from app.schemas import user as schemas
-from app.utils.security import (
+from backend.app.database import Base, engine, get_db
+from backend.app.models import user as models
+from backend.app.schemas import user as schemas
+from backend.app.utils.security import (
     verify_password,
     create_access_token,
     get_current_user,
     get_password_hash,
     ACCESS_TOKEN_EXPIRE_MINUTES,
 )
-from app.api import calendar
-from app.core.config import get_settings
-from app.utils.logger import get_logger
+from backend.app.api import calendar
+from backend.app.core.config import get_settings
+from backend.app.utils.logger import get_logger
 
 # Setup logger for this module
 logger = get_logger("app.main")
@@ -176,14 +176,40 @@ async def process_query(request: Request, db: Session = Depends(get_db)):
 
         logger.info(f"Processing query: {query} for session: {session_id}")
 
-        # For now, return a simple response
-        # TODO: Integrate with your ORII processing logic from orii_demo.py
-        response_text = f"I received your query: '{query}'. The backend integration is working! However, I need to connect to the ORII processing logic to provide intelligent calendar responses."
+        # Import the ORII processing logic
+        # Simple in-memory context storage (replace with Redis if needed)
+        conversation_context = {"chat_history": []}
+
+        # Process using the ORII demo logic
+        import sys
+        import os
+
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        root_dir = os.path.dirname(os.path.dirname(current_dir))
+        sys.path.insert(0, root_dir)
+
+        # Import the main processing function from orii_demo
+        from orii_demo import get_intent_response, format_chatbot_response
+
+        # Process the query
+        response_data = get_intent_response(query, conversation_context)
+        formatted_response = format_chatbot_response(response_data)
+
+        # Update context with the interaction
+        if not conversation_context:
+            conversation_context = {"chat_history": []}
+
+        conversation_context["chat_history"].append({"role": "user", "content": query})
+        conversation_context["chat_history"].append(
+            {"role": "assistant", "content": formatted_response}
+        )
+
+        # Note: Context is not persisted (in-memory only)
 
         return {
             "status": "success",
-            "response": response_text,
-            "timestamp": "2024-01-01T12:00:00",  # TODO: Use actual timestamp
+            "response": formatted_response,
+            "timestamp": datetime.now().isoformat(),
         }
 
     except Exception as e:
@@ -191,7 +217,7 @@ async def process_query(request: Request, db: Session = Depends(get_db)):
         return {
             "status": "error",
             "error": str(e),
-            "timestamp": "2024-01-01T12:00:00",  # TODO: Use actual timestamp
+            "timestamp": datetime.now().isoformat(),
         }
 
 
@@ -211,5 +237,9 @@ if __name__ == "__main__":
 
     # logger.info("Starting development server...")
     uvicorn.run(
-        "app.main:app", host="127.0.0.1", port=8000, reload=True, log_level="debug"
+        "backend.app.main:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=True,
+        log_level="debug",
     )

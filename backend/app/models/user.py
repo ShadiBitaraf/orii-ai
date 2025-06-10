@@ -10,7 +10,7 @@ Defines user table structure and fields:
 
 from sqlalchemy import Boolean, Column, Integer, String, DateTime
 from sqlalchemy.orm import relationship
-from app.database import Base
+from backend.app.database import Base
 from datetime import datetime, timezone
 
 
