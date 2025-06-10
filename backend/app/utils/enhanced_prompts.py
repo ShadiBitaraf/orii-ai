@@ -775,67 +775,75 @@ Return JSON with this format:
     def extract_time_parameters(
         self, user_query: str, user_context: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """PROMPT 2: Time Extraction with past/future awareness"""
-
-        current_datetime = user_context.get(
-            "current_datetime", datetime.now().isoformat()
-        )
-        user_timezone = user_context.get("timezone", "UTC")
-        time_direction = user_context.get("time_direction", "present")
-
-        prompt = f"""You are extracting time parameters from a calendar query.
-
-User query: "{user_query}"
-Current date and time: {current_datetime}
-User timezone: {user_timezone}
-Time direction hint: {time_direction}
-
-Parse the temporal expressions and convert to specific date ranges:
-
-**PRESENT/FUTURE Examples:**
-- "today" → start: 2025-06-08 00:00:00, end: 2025-06-08 23:59:59
-- "tomorrow" → start: 2025-06-09 00:00:00, end: 2025-06-09 23:59:59  
-- "next week" → start: 2025-06-09 00:00:00, end: 2025-06-15 23:59:59
-- "this weekend" → start: 2025-06-14 00:00:00, end: 2025-06-15 23:59:59
-- "next Monday" → start: 2025-06-09 00:00:00, end: 2025-06-09 23:59:59
-
-**PAST Examples (when time_direction is "past"):**
-- "last week" → start: 2025-05-25 00:00:00, end: 2025-05-31 23:59:59
-- "yesterday" → start: 2025-06-07 00:00:00, end: 2025-06-07 23:59:59
-- "last month" → start: 2025-05-01 00:00:00, end: 2025-05-31 23:59:59
-- "last therapy" → start: 2025-01-01 00:00:00, end: 2025-06-08 23:59:59 (last 6 months)
-- "when was my last" → start: 2025-01-01 00:00:00, end: 2025-06-08 23:59:59 (extended past range)
-
-**SEMANTIC QUERIES (no specific time):**
-- For queries about "last X" or "when was" → use extended past range (6 months back)
-- For queries about "next X" or "upcoming" → use extended future range (3 months forward)
-- For general semantic queries → use wide range (6 months back + 3 months forward)
-
-Return JSON:
-{{
-  "start_datetime": "2025-06-08T00:00:00",
-  "end_datetime": "2025-06-08T23:59:59",
-  "time_description": "today",
-  "time_direction": "past_or_present_or_future",
-  "confidence": 0.98
-}}
-
-If time cannot be parsed, set confidence to 0.0.
-Return ONLY the JSON response."""
+        """Extract time parameters using deterministic parsing (replacing LLM-based approach)"""
 
         try:
-            response = self.llm_client.get_completion(prompt, model="gpt-4")
-            result = json.loads(response)
+            # Use the fixed time parsing logic from time_manager
+            from ..core.time.time_manager import (
+                parse_time_range,
+                extract_date_range_from_query,
+            )
 
-            # Ensure required fields
-            result.setdefault("time_direction", time_direction)
-            result.setdefault("confidence", 0.0)
+            # First try the deterministic time parsing
+            time_result = parse_time_range(user_query)
 
-            return result
-        except (json.JSONDecodeError, Exception) as e:
-            self.logger.error(f"Time extraction error: {e}")
+            if time_result.get("specific_date"):
+                # Specific date found (like "tomorrow", "friday", "dec 8th")
+                specific_date = time_result["specific_date"]
+                start_time = specific_date.replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                end_time = specific_date.replace(
+                    hour=23, minute=59, second=59, microsecond=999999
+                )
 
-            # Provide default time range based on direction
+                return {
+                    "start_datetime": start_time.isoformat(),
+                    "end_datetime": end_time.isoformat(),
+                    "time_description": f"specific_date_{specific_date.strftime('%Y-%m-%d')}",
+                    "time_direction": "present",
+                    "confidence": 0.95,
+                }
+
+            elif time_result.get("date_range_start") and time_result.get(
+                "date_range_end"
+            ):
+                # Date range found (like "nov 9-12", "june 15-20")
+                start_time = time_result["date_range_start"]
+                end_time = time_result["date_range_end"]
+
+                return {
+                    "start_datetime": start_time.isoformat(),
+                    "end_datetime": end_time.isoformat(),
+                    "time_description": f"date_range_{start_time.strftime('%Y-%m-%d')}_to_{end_time.strftime('%Y-%m-%d')}",
+                    "time_direction": "present",
+                    "confidence": 0.95,
+                }
+
+            else:
+                # No specific date found, determine time direction and use appropriate range
+                time_direction = user_context.get("time_direction", "present")
+
+                # Check for past/future indicators in the query
+                query_lower = user_query.lower()
+                if any(
+                    word in query_lower
+                    for word in [
+                        "last",
+                        "previous",
+                        "past",
+                        "ago",
+                        "before",
+                        "yesterday",
+                    ]
+                ):
+                    time_direction = "past"
+                elif any(
+                    word in query_lower
+                    for word in ["next", "future", "upcoming", "tomorrow", "later"]
+                ):
+                    time_direction = "future"
+
             now = datetime.now()
             if time_direction == "past":
                 start_time = now - timedelta(days=180)  # 6 months back
@@ -852,9 +860,25 @@ Return ONLY the JSON response."""
             return {
                 "start_datetime": start_time.isoformat(),
                 "end_datetime": end_time.isoformat(),
-                "time_description": f"default_{time_direction}_range",
+                "time_description": f"general_{time_direction}_range",
                 "time_direction": time_direction,
-                "confidence": 0.5,
+                "confidence": 0.7,
+            }
+
+        except Exception as e:
+            self.logger.error(f"Time extraction error: {e}")
+
+            # Fallback to default current day
+            now = datetime.now()
+            start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_time = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+            return {
+                "start_datetime": start_time.isoformat(),
+                "end_datetime": end_time.isoformat(),
+                "time_description": "fallback_today",
+                "time_direction": "present",
+                "confidence": 0.3,
             }
 
     def semantic_event_matching(
@@ -990,58 +1014,111 @@ Context:
 - Calendar results: {results_text}
 - Current time: {current_datetime}
 
-Response guidelines:
-1. Be conversational and warm, not robotic
-2. Use natural language, avoid technical jargon
-3. **ALWAYS use bullet points (•) when listing multiple events or items**
-4. If no events found, be helpful and suggest alternatives
-5. For general chat, be friendly but redirect to calendar help
-6. Present calendar information in an easy-to-read bullet format
-7. For past queries, use past tense ("You had", "Your last")
-8. For future queries, use future tense ("You have coming up", "Your next")
+CRITICAL FORMATTING REQUIREMENTS:
+1. ALWAYS put each event on a NEW LINE
+2. Use line breaks (\\n) between each event
+3. Use simple dashes (-) instead of bullet points for better display
+4. Keep event details clear and readable
+5. Be conversational and warm
 
-**Formatting Examples:**
-✅ Good format:
-"Here's what you have coming up tomorrow:
-• **Meeting with John** - 2:00 PM (Conference Room A)
-• **Dentist Appointment** - 4:30 PM (Dr. Smith's Office)
+**EXACT FORMATTING TEMPLATE:**
+For multiple events:
+"Here's what you have coming up:
 
-Would you like more details about any of these?"
+- **Event 1 Title** at TIME
+- **Event 2 Title** at TIME  
+- **Event 3 Title** at TIME
 
-✅ Good format for no results:
-"I couldn't find any therapy sessions in your recent calendar. Here are some suggestions:
-• Check if it might be under a different name (counseling, mental health, etc.)
-• Look for appointments with specific doctor names
-• Consider if it was scheduled in a different calendar
+Would you like more details?"
 
-Would you like me to search for something more specific?"
+For single event:
+"You have one event coming up:
 
-❌ Bad format:
-"Query processed. 2 events retrieved for specified timeframe."
+- **Event Title** at TIME
 
-❌ Bad format:
-"No semantic matches found in database."
+Anything else you'd like to know?"
 
-For empty results, always offer helpful suggestions in bullet points.
-For single events, still use a bullet point for consistency.
+**SPECIFIC FORMAT RULES:**
+- Start each event line with "- " (dash and space)
+- Put event title in **bold**
+- Include time clearly
+- Add blank line before and after event list
+- Keep response under 4 lines total
 
-Generate a helpful, natural response based on the context provided.
+Generate a helpful, natural response following this EXACT format.
 Return ONLY the response text, no JSON or markup."""
 
         try:
             response = self.llm_client.get_completion(prompt, model="gpt-4")
-            return response.strip()
+
+            # Post-process the response to ensure proper formatting
+            formatted_response = self._post_process_response(
+                response.strip(), calendar_results
+            )
+            return formatted_response
         except Exception as e:
             self.logger.error(f"Response generation error: {e}")
             if calendar_results:
                 # Fallback formatting if LLM fails
-                event_count = len(calendar_results)
-                if event_count == 1:
-                    return f"I found 1 event for you:\n• {calendar_results[0].get('title', 'Event')}"
-                else:
-                    return f"I found {event_count} events for you. Let me know if you'd like more details!"
+                return self._create_fallback_response(calendar_results)
             else:
                 return "I couldn't find any matching events in your calendar. Could you provide more details or try a different search term?"
+
+    def _post_process_response(
+        self, response: str, calendar_results: List[Dict]
+    ) -> str:
+        """Post-process the LLM response to ensure proper formatting"""
+
+        # Replace bullet points with dashes for better display
+        response = response.replace("•", "-")
+
+        # Ensure proper line breaks - if the response seems to be all on one line
+        # but contains multiple events, add line breaks
+        if len(calendar_results) > 1 and "\n" not in response and "-" in response:
+            # Split on dash and rejoin with proper line breaks
+            parts = response.split("-")
+            if len(parts) > 2:  # Has multiple events
+                intro = parts[0].strip()
+                events = [f"- {part.strip()}" for part in parts[1:] if part.strip()]
+                response = f"{intro}\n\n" + "\n".join(events)
+
+        # Ensure there are line breaks before and after event lists
+        if "-" in response and not response.startswith("- "):
+            lines = response.split("\n")
+            formatted_lines = []
+            for line in lines:
+                if line.strip().startswith("-") and not line.startswith("\n"):
+                    # Add blank line before event list if not already there
+                    if formatted_lines and formatted_lines[-1].strip():
+                        formatted_lines.append("")
+                formatted_lines.append(line)
+            response = "\n".join(formatted_lines)
+
+        return response
+
+    def _create_fallback_response(self, calendar_results: List[Dict]) -> str:
+        """Create a fallback response when LLM processing fails"""
+        event_count = len(calendar_results)
+
+        if event_count == 1:
+            event = calendar_results[0]
+            title = event.get("title", event.get("summary", "Event"))
+            start_time = event.get(
+                "start_time", event.get("start", {}).get("dateTime", "")
+            )
+
+            try:
+                if start_time:
+                    dt_obj = datetime.fromisoformat(start_time.replace("Z", ""))
+                    time_str = dt_obj.strftime("%I:%M %p on %B %d")
+                else:
+                    time_str = "Time TBD"
+            except:
+                time_str = str(start_time) if start_time else "Time TBD"
+
+            return f"I found 1 event for you:\n\n- **{title}** at {time_str}\n\nAnything else you'd like to know?"
+        else:
+            return f"I found {event_count} events for you.\n\nWould you like me to show you the details?"
 
     def request_clarification(self, user_query: str, ambiguity_reason: str) -> str:
         """PROMPT 5: Clarification Request"""

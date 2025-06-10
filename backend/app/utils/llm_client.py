@@ -13,6 +13,19 @@ import re
 import dateutil.parser
 import json
 
+# Load environment variables
+try:
+    from dotenv import load_dotenv
+
+    # Try to load from root directory first
+    root_env_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", ".env")
+    if os.path.exists(root_env_path):
+        load_dotenv(root_env_path)
+    else:
+        load_dotenv()
+except ImportError:
+    pass
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)  # Changed from CRITICAL to INFO
 

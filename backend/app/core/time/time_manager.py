@@ -42,6 +42,12 @@ TIME_RANGE_PATTERNS = [
     r"(past|coming|previous|upcoming)\s+(\d+)\s+(day|days|week|weeks|month|months|year|years)",
     # Example: "3 days ago" or "2 weeks from now"
     r"(\d+)\s+(day|days|week|weeks|month|months|year|years)\s+(ago|from now)",
+    # Example: "entire year ahead", "whole month ahead", "full week ahead"
+    r"(entire|whole|full)\s+(year|month|week|day)\s*(ahead|forward)?",
+    # Example: "next year", "coming month", "previous week"
+    r"(next|coming|previous|last)\s+(year|month|week|day)",
+    # Example: "year ahead", "month ahead", "week ahead"
+    r"(year|month|week|day)\s+(ahead|forward|back|backward)",
 ]
 
 
@@ -83,28 +89,85 @@ def parse_time_range(query: str) -> Dict[str, Any]:
         if matches:
             groups = matches.groups()
 
-            # Extract the numeric value
+            # Handle different pattern types
             if len(groups) >= 2:
-                try:
-                    numeric_value = int(groups[1])
-                    unit = groups[2].lower()
+                # Pattern 1-3: numeric patterns like "last 3 days", "past 2 weeks", "5 months ago"
+                if groups[1].isdigit():
+                    try:
+                        numeric_value = int(groups[1])
+                        unit = groups[2].lower()
 
-                    # Convert to days based on unit
-                    if unit in ("day", "days"):
-                        result["days_range"] = numeric_value
-                    elif unit in ("week", "weeks"):
-                        result["days_range"] = numeric_value * 7
-                    elif unit in ("month", "months"):
-                        result["days_range"] = numeric_value * 30
-                    elif unit in ("year", "years"):
-                        result["days_range"] = numeric_value * 365
+                        # Convert to days based on unit
+                        if unit in ("day", "days"):
+                            result["days_range"] = numeric_value
+                        elif unit in ("week", "weeks"):
+                            result["days_range"] = numeric_value * 7
+                        elif unit in ("month", "months"):
+                            result["days_range"] = numeric_value * 30
+                        elif unit in ("year", "years"):
+                            result["days_range"] = numeric_value * 365
 
-                    logger.debug(
-                        f"Found time range: {numeric_value} {unit} = {result['days_range']} days"
-                    )
-                    break
-                except (ValueError, TypeError):
-                    pass
+                        logger.debug(
+                            f"Found time range: {numeric_value} {unit} = {result['days_range']} days"
+                        )
+                        break
+                    except (ValueError, TypeError):
+                        pass
+                # Pattern 4-6: non-numeric patterns like "entire year ahead", "next month", "year ahead"
+                else:
+                    try:
+                        # First group could be qualifier (entire, next, etc.) or unit (year, month, etc.)
+                        qualifier = groups[0].lower()
+                        unit = (
+                            groups[1].lower() if len(groups) > 1 else groups[0].lower()
+                        )
+
+                        # If first group is the unit, adjust
+                        if qualifier in ("year", "month", "week", "day"):
+                            unit = qualifier
+                            qualifier = "next"  # default
+
+                        # Set range based on unit (default to 1 of that unit)
+                        if unit in ("day",):
+                            result["days_range"] = 1
+                        elif unit in ("week",):
+                            result["days_range"] = 7
+                        elif unit in ("month",):
+                            result["days_range"] = 30
+                        elif unit in ("year",):
+                            result["days_range"] = 365
+
+                        # Determine if past or future based on qualifier
+                        if qualifier in ("last", "past", "previous"):
+                            result["is_past"] = True
+                            result["reverse_chronological"] = True
+                        elif qualifier in (
+                            "next",
+                            "coming",
+                            "upcoming",
+                            "entire",
+                            "whole",
+                            "full",
+                        ):
+                            result["is_past"] = False
+
+                        logger.debug(
+                            f"Found time range: {qualifier} {unit} = {result['days_range']} days"
+                        )
+                        break
+                    except (ValueError, TypeError, IndexError):
+                        pass
+
+    # Try to extract date ranges first (like "nov 9-12", "from dec 1 to dec 5")
+    try:
+        date_range_start, date_range_end = extract_date_range_from_query(query)
+        if date_range_start and date_range_end:
+            logger.debug(f"Found date range: {date_range_start} to {date_range_end}")
+            result["date_range_start"] = date_range_start
+            result["date_range_end"] = date_range_end
+            return result
+    except Exception as e:
+        logger.debug(f"No date range found: {e}")
 
     # Try to extract a specific date using dateparser
     try:
@@ -118,6 +181,7 @@ def parse_time_range(query: str) -> Dict[str, Any]:
             r"\b(?:on\s+)?tomorrow\b",
             r"\b(?:on\s+)?yesterday\b",
             r"\b(?:on\s+)?today\b",
+            r"\b(?:this\s+|next\s+|last\s+|previous\s+)?weekend\b",
         ]
 
         # Extract date expressions from query
@@ -133,11 +197,126 @@ def parse_time_range(query: str) -> Dict[str, Any]:
         if date_expr:
             logger.debug(f"Found date expression: {date_expr}")
 
-            # Use dateparser to interpret the expression
-            parsed_date = dateparser.parse(date_expr)
-            if parsed_date:
-                result["specific_date"] = parsed_date
-                logger.debug(f"Parsed specific date: {parsed_date}")
+            # Check for weekend patterns first
+            if "weekend" in date_expr.lower():
+                logger.debug(f"Found weekend pattern: {date_expr}")
+                now = datetime.now()
+                today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+                # Calculate days until Saturday (start of weekend)
+                days_until_saturday = (5 - today.weekday()) % 7
+
+                # Handle "this weekend" vs "next weekend"
+                if "next" in date_expr.lower():
+                    days_until_saturday += 7
+                elif days_until_saturday == 0 and today.weekday() == 5:
+                    # If it's Saturday, "weekend" could mean this weekend
+                    pass  # Use this weekend
+                elif days_until_saturday <= 1 and today.weekday() >= 5:
+                    # If it's Sunday or late Saturday, "weekend" likely means next weekend
+                    if "this" not in date_expr.lower():
+                        days_until_saturday += 7
+
+                weekend_start = today + timedelta(days=days_until_saturday)
+                # Weekend is Saturday + Sunday (2 days)
+                result["date_range_start"] = weekend_start
+                result["date_range_end"] = weekend_start + timedelta(days=2)
+                logger.debug(
+                    f"Calculated weekend: {weekend_start} to {weekend_start + timedelta(days=2)}"
+                )
+                return result
+
+            # Check if this is a weekday name that needs special handling
+            weekday_names = [
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday",
+            ]
+            is_weekday = any(day in date_expr.lower() for day in weekday_names)
+
+            if is_weekday:
+                # Handle weekday names specially to get the next occurrence
+                logger.debug(f"Found weekday name: {date_expr}")
+
+                # Extract the weekday name
+                weekday_name = None
+                for day in weekday_names:
+                    if day in date_expr.lower():
+                        weekday_name = day
+                        break
+
+                if weekday_name:
+                    # Calculate the next occurrence of this weekday
+                    now = datetime.now()
+                    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+                    weekday_map = {
+                        "monday": 0,
+                        "tuesday": 1,
+                        "wednesday": 2,
+                        "thursday": 3,
+                        "friday": 4,
+                        "saturday": 5,
+                        "sunday": 6,
+                    }
+
+                    target_weekday = weekday_map[weekday_name]
+                    current_weekday = today.weekday()
+
+                    # Calculate days until the target weekday
+                    days_until_day = (target_weekday - current_weekday) % 7
+
+                    # If the day is today but it's late in the evening, assume next week
+                    if days_until_day == 0 and now.hour >= 18:
+                        days_until_day = 7
+                    # If asking for just a weekday name (not "next" or "this"),
+                    # and the day hasn't occurred yet this week, use this week's occurrence
+                    elif days_until_day == 0:
+                        # If it's the same day and still reasonable hours, use today
+                        pass  # days_until_day remains 0
+
+                    # Check for explicit modifiers
+                    if "next" in date_expr.lower():
+                        days_until_day += 7  # Always next week if "next" is specified
+                    elif "last" in date_expr.lower() or "previous" in date_expr.lower():
+                        # Handle past weekdays
+                        days_until_day = (current_weekday - target_weekday) % 7
+                        if days_until_day == 0:
+                            days_until_day = 7  # Last week's occurrence
+                        parsed_date = today - timedelta(days=days_until_day)
+                        result["specific_date"] = parsed_date
+                        result["is_past"] = True
+                        logger.debug(f"Calculated past weekday: {parsed_date}")
+                        return result
+
+                    # Calculate the target date (future)
+                    parsed_date = today + timedelta(days=days_until_day)
+                    result["specific_date"] = parsed_date
+                    logger.debug(f"Calculated future weekday: {parsed_date}")
+            else:
+                # Use dateparser to interpret other date expressions
+                parsed_date = dateparser.parse(date_expr)
+                if parsed_date:
+                    # For relative date expressions like "tomorrow", "today", "yesterday",
+                    # we want the full calendar day, not the current time on that date
+                    relative_dates = ["tomorrow", "today", "yesterday"]
+                    if any(
+                        rel_date in date_expr.lower() for rel_date in relative_dates
+                    ):
+                        # Reset time to beginning of day for calendar day queries
+                        parsed_date = parsed_date.replace(
+                            hour=0, minute=0, second=0, microsecond=0
+                        )
+                        logger.debug(
+                            f"Reset time to beginning of day for relative date: {parsed_date}"
+                        )
+
+                    result["specific_date"] = parsed_date
+                    logger.debug(f"Parsed specific date: {parsed_date}")
     except Exception as e:
         logger.error(f"Error parsing specific date: {e}")
 

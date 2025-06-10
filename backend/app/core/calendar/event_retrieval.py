@@ -29,7 +29,7 @@ except OSError:
 
     logger.info("Downloading spaCy language model...")
     subprocess.run(
-        ["python", "-m", "spacy", "download", "en_core_web_sm"],
+        ["python3", "-m", "spacy", "download", "en_core_web_sm"],
         check=True,
         capture_output=True,
     )
@@ -329,14 +329,13 @@ def get_upcoming_events(
             calendar_id=calendar_id,
         )
     else:
-        # Use the new function if no specific calendar_id is provided
-        client_id = os.environ.get("GOOGLE_CLIENT_ID", "default_client_id")
-        return get_events_in_date_range(
-            client_id,
+        # Use get_events_in_range which respects visible calendar settings
+        return get_events_in_range(
             now,
             time_max,
-            query=None,
-        )[:max_results]
+            max_total_results=max_results,
+            calendar_id=None,
+        )
 
 
 def get_past_events(
@@ -417,21 +416,20 @@ def get_events_in_date_range(
     time_min = start_date.isoformat() + "Z"
     time_max = end_date.isoformat() + "Z"
 
-    # Get all calendars for this user
-    calendar_list = []
+    # Get only visible/selected calendars for this user
+    from .calendar_service import get_visible_calendars
+
     try:
-        page_token = None
-        while True:
-            calendar_list_result = (
-                service.calendarList().list(pageToken=page_token).execute()
-            )
-            for calendar_entry in calendar_list_result.get("items", []):
-                calendar_list.append(calendar_entry["id"])
-            page_token = calendar_list_result.get("nextPageToken")
-            if not page_token:
-                break
+        visible_calendars = get_visible_calendars()
+        if not visible_calendars:
+            logger.debug("No visible calendars found")
+            return []
+
+        calendar_list = [cal.get("id") for cal in visible_calendars if cal.get("id")]
+        cal_names = [cal.get("summary", "Unknown") for cal in visible_calendars]
+        logger.info(f"Querying {len(calendar_list)} visible calendars: {cal_names}")
     except Exception as e:
-        logger.error(f"Error retrieving calendar list: {e}")
+        logger.error(f"Error retrieving visible calendars: {e}")
         return []
 
     all_events = []

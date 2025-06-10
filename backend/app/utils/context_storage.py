@@ -103,38 +103,29 @@ class QueryLimitedContextStorage(ContextStorage):
     def add_query_to_context(
         self, session_id: str, query: str, response: str, intent: str = None
     ) -> Dict[str, Any]:
-        """Add a new query to the context and maintain query limit"""
+        """Add a new message to the context and maintain message limit"""
         context = self.get_context(session_id)
 
-        # Initialize queries list if not exists
-        if "queries" not in context:
-            context["queries"] = []
+        # Initialize messages list if not exists
+        if "messages" not in context:
+            context["messages"] = []
 
-        # Add new query
-        query_entry = {
-            "query": query,
-            "response": response,
-            "intent": intent,
-            "timestamp": datetime.now().isoformat(),
-        }
+        # Add user message and assistant response
+        context["messages"].append({"role": "user", "content": query})
+        context["messages"].append({"role": "assistant", "content": response})
 
-        context["queries"].append(query_entry)
+        # Keep only last N messages (N*2 since we add both user and assistant)
+        context["messages"] = context["messages"][-(self.max_queries * 2) :]
 
-        # Keep only last N queries
-        context["queries"] = context["queries"][-self.max_queries :]
-
-        # Update metadata
-        context["last_query"] = query
-        context["last_response"] = response
-        context["last_intent"] = intent
+        # Simple metadata
         context["updated_at"] = datetime.now().isoformat()
 
         # Save updated context
         self.save_context(session_id, context)
 
         logger.info(
-            f"Added query to context for session {session_id}. "
-            f"Context now has {len(context['queries'])} queries."
+            f"Added message to context for session {session_id}. "
+            f"Context now has {len(context['messages'])} messages."
         )
 
         return context
@@ -285,10 +276,8 @@ class QueryLimitedContextStorage(ContextStorage):
     def _empty_context(self) -> Dict[str, Any]:
         """Return empty context structure"""
         return {
-            "queries": [],
-            "last_query": None,
-            "last_response": None,
-            "last_intent": None,
+            "messages": [],
+            "created_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat(),
         }
 
