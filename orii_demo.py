@@ -174,6 +174,12 @@ def format_chatbot_response(response):
         if "status" in response and response["status"] == "error":
             return f"Error: {response.get('message', 'Unknown error')}"
 
+        # Handle clarification case when no events found
+        if response.get("status") == "no_events_clarification_needed":
+            message = response.get("message", "")
+            suggestion = response.get("suggestion", "")
+            return f"{message}\n\n{suggestion}"
+
         if "message" in response:
             result = [response["message"]]
 
@@ -249,7 +255,7 @@ def format_chatbot_response(response):
 
 
 def get_intent_response(query, conversation_context=None):
-    """Process the query and get a response"""
+    """Process the query and get a response using hybrid LLM + rule-based approach"""
     try:
         logger.info(f"Processing query: {query}")
 
@@ -261,101 +267,68 @@ def get_intent_response(query, conversation_context=None):
                 "message": "The necessary modules couldn't be loaded. Please check your installation.",
             }
 
-        # Check if this is a follow-up question
-        is_follow_up = False
-        follow_up_indicators = ["how about", "what about", "and", "how many", "which"]
-
-        if conversation_context and any(
-            query.lower().startswith(indicator) for indicator in follow_up_indicators
-        ):
-            is_follow_up = True
-            logger.debug(f"Detected follow-up question: {query}")
-
-            # If the previous question was about a date/time
-            if conversation_context.get("last_intent") == "time_date":
-                # If the current query is something like "how about tomorrow"
-                if any(
-                    term in query.lower()
-                    for term in ["tomorrow", "next day", "day after"]
-                ):
-                    # Prepare a modified query that includes the full context
-                    from datetime import datetime, timedelta
-
-                    # Parse the date from the last response
-                    try:
-                        # Calculate tomorrow's date
-                        current_date = datetime.now()
-                        tomorrow = current_date + timedelta(days=1)
-                        logger.info(
-                            f"Expanding follow-up query to use tomorrow's date: {tomorrow.strftime('%Y-%m-%d')}"
-                        )
-
-                        # Create a query that asks for events on tomorrow's date - be explicit about events
-                        query = f"what events do I have on {tomorrow.strftime('%A, %B %d, %Y')}"
-                        logger.debug(f"Expanded query: {query}")
-
-                        # Set the intent type to calendar_query to ensure we get events, not just the date
-                        if conversation_context:
-                            conversation_context["last_intent"] = "calendar_query"
-                    except Exception as e:
-                        logger.error(f"Error processing date follow-up: {e}")
-                        logger.exception("Exception details:")
-
-            # If previous question was about events on a particular date
-            elif conversation_context.get("last_intent") in [
-                "search_events",
-                "calendar_query",
-            ]:
-                if "tomorrow" in query.lower() or "next day" in query.lower():
-                    # Get the previous date if available
-                    if conversation_context.get("last_date"):
-                        try:
-                            # Parse the previous date and add a day
-                            from dateutil import parser
-                            from datetime import timedelta
-
-                            # Try to parse the date string
-                            prev_date_str = conversation_context.get("last_date")
-                            prev_date = parser.parse(prev_date_str)
-                            next_date = prev_date + timedelta(days=1)
-
-                            # Create a query for the next day - be explicit about events
-                            query = f"what events do I have on {next_date.strftime('%A, %B %d, %Y')}"
-                            logger.debug(f"Expanded follow-up query: {query}")
-
-                            # Ensure we're keeping the right intent type
-                            if conversation_context:
-                                conversation_context["last_intent"] = "calendar_query"
-                        except Exception as e:
-                            logger.error(f"Error processing date follow-up: {e}")
-                            logger.exception("Exception details:")
-
-        # Determine the intent of the query - pass the conversation context to handle follow-ups
-        logger.debug("Calling determine_query_intent")
+        # Determine the intent of the query using our new hybrid approach
+        logger.debug("Calling determine_query_intent with LLM classification")
         intent_data = determine_query_intent(query, conversation_context)
-        logger.debug(f"Intent determined: {intent_data.get('intent_type')}")
+        logger.debug(f"Intent determined: {intent_data}")
 
-        # Add additional context for follow-up questions
-        if is_follow_up and conversation_context:
-            intent_data["is_follow_up"] = True
-            intent_data["previous_intent"] = conversation_context.get("last_intent")
-            intent_data["previous_response"] = conversation_context.get("last_response")
-
-        # Check if this is a greeting or non-calendar intent
         intent_type = intent_data.get("intent_type", "").lower()
-        needs_calendar_data = intent_data.get("needs_calendar_data", True)
+        llm_classification = intent_data.get("llm_classification", {})
+
+        # Handle follow-up questions with specific processing
+        if intent_type == "follow_up_question":
+            logger.debug("Processing follow-up question with specialized handler")
+            try:
+                # Import the follow-up handler
+                from backend.app.core.intent.intent_processor import (
+                    follow_up_question_handler,
+                )
+
+                # Use the specialized follow-up handler
+                import asyncio
+
+                follow_up_response = asyncio.run(
+                    follow_up_question_handler(
+                        query=query,
+                        intent_data=intent_data,
+                        conversation_context=conversation_context,
+                    )
+                )
+
+                return {
+                    "status": "success",
+                    "message": follow_up_response,
+                    "intent_type": "follow_up_question",
+                    "llm_classification": llm_classification,
+                }
+
+            except Exception as e:
+                logger.error(f"Error in follow-up handler: {e}")
+                # Fall back to regular processing
+                intent_type = "search_events"
 
         # Handle greeting intents without accessing calendar
-        if intent_type == "greeting" or (
-            intent_type == "assistant_info" and not needs_calendar_data
-        ):
-            logger.info(f"Handling greeting intent: {intent_type}")
+        if intent_type == "greeting":
+            logger.info(f"Handling greeting intent")
             return {
                 "status": "success",
                 "message": "Hello! I'm your calendar assistant. How can I help you with your schedule today?",
-                "intent_type": intent_type,
+                "intent_type": "greeting",
             }
 
+        # Handle time/date queries
+        if intent_type == "time_date":
+            logger.info("Handling time/date query")
+            from datetime import datetime
+
+            now = datetime.now()
+            return {
+                "status": "success",
+                "message": f"Today is {now.strftime('%A, %B %d, %Y')} and the current time is {now.strftime('%I:%M %p')}.",
+                "intent_type": "time_date",
+            }
+
+        # For all other intents, use the regular calendar processing
         # Default values if not provided by intent detection
         intent_data.setdefault("intent_type", "search_events")
         intent_data.setdefault("is_past", False)
@@ -364,11 +337,11 @@ def get_intent_response(query, conversation_context=None):
         intent_data.setdefault("specific_date", None)
         intent_data.setdefault("search_terms", [])
         intent_data.setdefault("time_info", {})
-        intent_data.setdefault("specified_calendar", "primary")
+        intent_data.setdefault("specified_calendar", None)
 
         logger.debug(f"Processing intent with parameters: {intent_data}")
 
-        # Process the intent
+        # Process the intent using the regular calendar processor
         logger.debug("Calling process_intent")
         response = process_intent(
             intent_type=intent_data.get("intent_type"),
@@ -385,9 +358,10 @@ def get_intent_response(query, conversation_context=None):
         )
         logger.debug("Intent processing complete")
 
-        # Add the original intent data and time info to the response
+        # Add the original intent data and LLM classification to the response
         response["intent_type"] = intent_data.get("intent_type")
         response["time_info"] = intent_data.get("time_info", {})
+        response["llm_classification"] = llm_classification
 
         # Log events count if available
         if "events" in response:
@@ -404,17 +378,13 @@ def get_intent_response(query, conversation_context=None):
         }
 
 
-# Enhanced processing using the new prompt strategy
+# Simplified processing using only the fixed legacy path
 def process_query(query, conversation_context=None):
-    """Process a query using the enhanced prompt engineering strategy"""
+    """Process a query using the fixed and reliable legacy processing path"""
     logger.debug(f"process_query called with query: {query}")
 
     if not conversation_context:
         conversation_context = {
-            "last_intent": None,
-            "last_response": None,
-            "last_time_info": None,
-            "last_date": None,
             "chat_history": [],
         }
         logger.debug("Created new conversation context")
@@ -423,44 +393,7 @@ def process_query(query, conversation_context=None):
     conversation_context["chat_history"].append({"role": "user", "content": query})
 
     try:
-        # Try the enhanced prompt strategy first
-        from backend.app.utils.enhanced_prompts import EnhancedCalendarProcessor
-
-        processor = EnhancedCalendarProcessor()
-        user_context = {
-            "current_datetime": datetime.now().isoformat(),
-            "timezone": "America/New_York",  # Could be made configurable
-            "chat_history": conversation_context.get("chat_history", []),
-        }
-
-        result = processor.process_calendar_query(query, user_context)
-
-        # Use the enhanced response
-        formatted_response = result.response
-
-        # Store in history
-        conversation_context["chat_history"].append(
-            {"role": "assistant", "content": formatted_response}
-        )
-
-        # Update conversation context
-        conversation_context["last_intent"] = result.intent
-        conversation_context["last_response"] = {
-            "intent_type": result.intent,
-            "confidence": result.confidence,
-            "needs_clarification": result.needs_clarification,
-        }
-
-        logger.info(
-            f"Enhanced processing: {result.intent} (confidence: {result.confidence})"
-        )
-
-        return formatted_response, conversation_context
-
-    except Exception as e:
-        logger.warning(f"Enhanced processing failed, falling back to legacy: {e}")
-
-        # Fallback to original processing method
+        # Use the fixed legacy processing method (no more dual paths!)
         response = get_intent_response(query, conversation_context)
         formatted_response = format_chatbot_response(response)
 
@@ -469,15 +402,18 @@ def process_query(query, conversation_context=None):
             {"role": "assistant", "content": formatted_response}
         )
 
-        # Update conversation context
-        conversation_context["last_intent"] = response.get("intent_type")
-        conversation_context["last_response"] = response
-        if "time_info" in response:
-            conversation_context["last_time_info"] = response["time_info"]
-        if "date" in response:
-            conversation_context["last_date"] = response["date"]
-
+        logger.info(f"Query processed successfully using legacy path")
         return formatted_response, conversation_context
+
+    except Exception as e:
+        logger.error(f"Error processing query: {e}")
+        error_response = "I encountered an error processing your request. Please try rephrasing your question."
+
+        conversation_context["chat_history"].append(
+            {"role": "assistant", "content": error_response}
+        )
+
+        return error_response, conversation_context
 
 
 def simulate_typing(text):

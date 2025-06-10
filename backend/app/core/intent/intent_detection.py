@@ -26,268 +26,61 @@ def determine_query_intent(
     query: str, conversation_context: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
-    Determine the intent of a query using LLM-powered understanding.
+    Determine the intent of a user query using a hybrid approach:
+    1. LLM-powered intent classification for understanding
+    2. Rule-based processing for execution
 
     Args:
-        query: The natural language query
-        conversation_context: Optional conversation context from previous interactions
+        query: User's query string
+        conversation_context: Optional conversation context
 
     Returns:
-        Dictionary containing the intent type, confidence level, and other parameters
+        Dict with intent type and parameters
     """
-    start_time = time.time()
+    logger.debug(f"Determining intent for query: {query}")
 
-    # Log the query being processed but don't print to console
-    logger.debug(f"Processing query intent: '{query}'")
+    # Step 1: Use LLM to understand the true intent
+    llm_intent = classify_query_intent_with_llm(query, conversation_context)
 
-    # Check if this is a follow-up question with implicit context
-    is_follow_up = False
-    follow_up_indicators = [
-        "how about",
-        "what about",
-        "and",
-        "what's",
-        "what is",
-        "how many",
-        "which",
-    ]
+    # Step 2: Use rule-based processing to extract time/search info
+    rule_based_result = rule_based_intent_detection(query)
 
-    if conversation_context and any(
-        query.lower().startswith(indicator) for indicator in follow_up_indicators
-    ):
-        is_follow_up = True
-        logger.debug(f"Detected potential follow-up question: {query}")
+    # Step 3: Combine LLM understanding with rule-based extraction
+    result = rule_based_result.copy()  # Start with rule-based data
 
-        # Handle common follow-up patterns
-        if conversation_context.get("last_intent") == "time_date" and any(
-            term in query.lower() for term in ["tomorrow", "next day", "day after"]
-        ):
-            # For follow-ups to date queries like "what day is it" → "how about tomorrow"
-            from datetime import datetime, timedelta
-
-            current_date = datetime.now()
-            tomorrow = current_date + timedelta(days=1)
-            logger.info(
-                f"Handling date follow-up with tomorrow's date: {tomorrow.strftime('%Y-%m-%d')}"
-            )
-            # Modify the query to include the full context
-            query = f"what day is {tomorrow.strftime('%A, %B %d, %Y')}"
-            logger.debug(f"Expanded query: {query}")
-
-    # Get LLM client
-    llm_client = get_llm_client()
-    if not llm_client:
-        logger.debug("LLM client not available, using fallback methods")
-        return rule_based_intent_detection(query)
-
-    # Extract time information
-    from ..time.time_manager import parse_time_range
-
-    time_info = parse_time_range(query)
-    logger.debug(f"Time info from parser: {time_info}")
-
-    # Check for explicit time/date questions first with pattern matching
-    query_lower = query.lower()
-    time_date_patterns = [
-        r"what (?:day|date) is (?:it|today)",
-        r"what is (?:the|today\'s) (?:day|date)",
-        r"what (?:day|date) (?:is it|are we|do we have) today",
-        r"what time is it",
-        r"what is the time",
-        r"(?:tell me|show me) (?:the|today\'s) (?:day|date|time)",
-        r"current (?:day|date|time)",
-        r"today\'s (?:day|date)",
-    ]
-
-    for pattern in time_date_patterns:
-        if re.search(pattern, query_lower):
-            logger.debug(f"Detected time/date question with pattern: {pattern}")
-            return {
-                "intent_type": "time_date",
-                "is_past": False,
-                "days_range": 1,
-                "reverse_chronological": False,
-                "specific_date": time_info.get("specific_date"),
-                "date_range_start": None,
-                "date_range_end": None,
-                "search_terms": [],
-                "specified_calendar": None,
-                "needs_calendar_data": False,
-                "time_info": time_info,
-            }
-
-    # Determine intent using LLM
-    logger.debug("Using LLM for intent classification")
-
-    try:
-        # If this is a follow-up, provide the context to the LLM
-        intent_data = llm_client.classify_intent(
-            query, time_info, conversation_context if is_follow_up else None
-        )
-        logger.debug(f"Parsed intent data: {intent_data}")
-
-        # Add follow-up flag if detected
-        if is_follow_up:
-            intent_data["is_follow_up"] = True
-
-            # If there was a previous calendar-specific intent, preserve it
-            if (
-                conversation_context
-                and conversation_context.get("last_response")
-                and "specified_calendar" in conversation_context["last_response"]
-            ):
-                previous_calendar = conversation_context["last_response"].get(
-                    "specified_calendar"
-                )
-                if previous_calendar and not intent_data.get("specified_calendar"):
-                    intent_data["specified_calendar"] = previous_calendar
-                    logger.debug(
-                        f"Carrying over calendar specification from previous query: {previous_calendar}"
-                    )
-
-        # Detect last/next occurrence intent
-        query_lower = query.lower()
-
-        # Check for last/previous event queries if not explicitly set by LLM
-        if "is_find_last_occurrence" not in intent_data:
-            last_occurrence_phrases = [
-                "when was the last",
-                "when was my last",
-                "most recent",
-                "find the last",
-                "last time",
-            ]
-            intent_data["is_find_last_occurrence"] = any(
-                phrase in query_lower for phrase in last_occurrence_phrases
-            )
-
-            if intent_data["is_find_last_occurrence"]:
-                logger.debug(f"Detected 'find last occurrence' type query: {query}")
-                # For these queries, we want to search backwards in time
-                intent_data["is_past"] = True
-                intent_data["reverse_chronological"] = True
-                # Use a much larger time window for searching
-                if (
-                    not intent_data.get("days_range")
-                    or intent_data.get("days_range", 0) < 30
-                ):
-                    intent_data["days_range"] = 365
-                    logger.debug(
-                        f"Expanded search window to {intent_data['days_range']} days for 'last occurrence' query"
-                    )
-
-        # Check for next/upcoming event queries if not explicitly set by LLM
-        if "is_find_next_occurrence" not in intent_data:
-            next_occurrence_phrases = [
-                "when is my next",
-                "when is the next",
-                "when will be my next",
-                "when will be the next",
-                "next time",
-                "next occurrence",
-            ]
-            intent_data["is_find_next_occurrence"] = any(
-                phrase in query_lower for phrase in next_occurrence_phrases
-            )
-
-            if intent_data["is_find_next_occurrence"]:
-                logger.debug(f"Detected 'find next occurrence' type query: {query}")
-                # For these queries, we want to search forward in time
-                intent_data["is_past"] = False
-                intent_data["reverse_chronological"] = False
-                # Use a much larger time window for searching
-                if (
-                    not intent_data.get("days_range")
-                    or intent_data.get("days_range", 0) < 30
-                ):
-                    intent_data["days_range"] = 365
-                    logger.debug(
-                        f"Expanded search window to {intent_data['days_range']} days for 'next occurrence' query"
-                    )
-
-        # Make sure we transfer any relevant time_info to the intent_data
-        # if it's not already present
-        for key in [
-            "specific_date",
-            "date_range_start",
-            "date_range_end",
-            "is_past",
-            "days_range",
-            "reverse_chronological",
-        ]:
-            if (
-                key in time_info
-                and time_info[key] is not None
-                and key not in intent_data
-            ):
-                logger.debug(
-                    f"Adding {key} from time_info to intent_data: {time_info[key]}"
-                )
-                intent_data[key] = time_info[key]
-            elif key in time_info and time_info[key] is not None and key in intent_data:
-                # Prefer the parser's temporal information over LLM's
-                logger.debug(
-                    f"Overriding {key} in intent_data with time_info: {intent_data[key]} -> {time_info[key]}"
-                )
-                intent_data[key] = time_info[key]
-
-        # Make sure to properly handle date_mentioned information from time_info
-        if time_info.get("date_mentioned") and time_info.get("specific_date"):
-            # Override with specific date info if available
-            intent_data["specific_date"] = time_info["specific_date"]
-            logger.debug(
-                f"Setting specific_date from time_info: {intent_data['specific_date']}"
-            )
-
-            # If the query is asking about a date but there are no calendar indicators,
-            # it might be a simple date query (e.g., "what date was yesterday")
-            if (
-                "what" in query.lower()
-                and "date" in query.lower()
-                and not intent_data["needs_calendar_data"]
-            ):
-                intent_data["intent_type"] = "time_date"
-                logger.debug(f"Overriding intent to time_date based on query pattern")
-
-        # Extract search terms
-        if "search_terms" not in intent_data or not intent_data["search_terms"]:
-            intent_data["search_terms"] = extract_search_terms(query, time_info)
-
-        return intent_data
-
-    except Exception as e:
-        logger.error(f"Error with LLM intent classification: {e}")
-        logger.debug("Falling back to rule-based approach")
-
-    # If we reach here, LLM classification failed
-    # Simple rule-based fallback
-    query_lower = query.lower()
-    result = {
-        "intent_type": "calendar_query",  # Default intent
-        "is_past": time_info.get("is_past", False),
-        "days_range": time_info.get("days_range", 7),
-        "reverse_chronological": time_info.get("reverse_chronological", False),
-        "specific_date": time_info.get("specific_date"),
-        "date_range_start": time_info.get("date_range_start"),
-        "date_range_end": time_info.get("date_range_end"),
+    # Override intent type based on LLM classification
+    intent_mapping = {
+        "follow_up_question": "follow_up_question",
+        "schedule_query": "search_events",
+        "event_search": "search_events",
+        "availability_check": "availability_check",
+        "event_creation": "create_event",
+        "non_calendar": "greeting",
+        "time_date_query": "time_date",
     }
 
-    # Determine intent type based on keywords
-    if "create" in query_lower or "schedule" in query_lower or "add" in query_lower:
-        result["intent_type"] = "event_creation"
-    elif (
-        "what time" in query_lower
-        or "what day" in query_lower
-        or "what date" in query_lower
-    ):
-        result["intent_type"] = "time_date"
-    elif any(
-        term in query_lower
-        for term in ["show", "list", "display", "get", "find", "when", "what"]
-    ):
-        result["intent_type"] = "calendar_query"
+    llm_intent_type = llm_intent.get("intent", "schedule_query")
+    mapped_intent = intent_mapping.get(llm_intent_type, "search_events")
 
-    logger.debug(f"Rule-based intent result: {result}")
+    # Update result with LLM insights
+    result.update(
+        {
+            "intent_type": mapped_intent,
+            "llm_classification": llm_intent,
+            "is_follow_up": llm_intent.get("is_follow_up", False),
+            "question_type": llm_intent.get("question_type", "none"),
+            "requested_detail": llm_intent.get("requested_detail", "none"),
+            "confidence": llm_intent.get("confidence", 0.5),
+        }
+    )
+
+    # Special handling for follow-up questions
+    if mapped_intent == "follow_up_question":
+        result["needs_calendar_data"] = True
+        # For follow-ups, use a broader search range to find relevant events
+        result["days_range"] = 30  # Look in a month range for context
+
+    logger.debug(f"Final intent result: {result}")
     return result
 
 
@@ -686,6 +479,40 @@ def extract_search_terms(
             except ImportError:
                 return [full_phrase]
 
+    # Filter out time-related words that shouldn't be search terms
+    time_related_stopwords = {
+        "coming",
+        "upcoming",
+        "next",
+        "last",
+        "previous",
+        "past",
+        "future",
+        "ahead",
+        "back",
+        "forward",
+        "backward",
+        "recent",
+        "today",
+        "tomorrow",
+        "yesterday",
+        "week",
+        "month",
+        "year",
+        "day",
+        "time",
+        "schedule",
+        "calendar",
+        "events",
+        "event",
+        "have",
+        "having",
+        "scheduled",
+    }
+
+    # Combine with existing stopwords
+    all_stopwords = stopwords.union(time_related_stopwords)
+
     # Extract all words from the query
     words = re.findall(r"\b\w+\b", query_lower)
 
@@ -721,21 +548,23 @@ def extract_search_terms(
         content_words = words
 
     # Filter out stopwords
-    content_words = [
-        word for word in content_words if word not in stopwords and len(word) > 2
+    meaningful_words = [
+        word for word in content_words if word not in all_stopwords and len(word) > 2
     ]
 
-    if not content_words:
-        logger.debug(f"No meaningful content words found after filtering")
+    if not meaningful_words:
+        logger.debug(
+            f"No meaningful content words found after filtering time-related words"
+        )
         return None
 
     # Build useful phrases from the content words
     # Start with the longest possible phrases
     phrases = []
 
-    # 1. Try to find consecutive content words to form phrases
+    # 1. Try to find consecutive meaningful words to form phrases
     current_phrase = []
-    for word in content_words:
+    for word in meaningful_words:
         current_phrase.append(word)
 
     if current_phrase:
@@ -743,10 +572,10 @@ def extract_search_terms(
         phrases.append(phrase)
         logger.debug(f"Extracted content phrase: '{phrase}'")
 
-    # 2. If we have multiple content words, also add individual words as backup
-    if len(content_words) > 1:
+    # 2. If we have multiple meaningful words, also add individual words as backup
+    if len(meaningful_words) > 1:
         # Add individual words that are likely important (longer words)
-        for word in content_words:
+        for word in meaningful_words:
             if len(word) > 3 and word not in phrases:
                 phrases.append(word)
                 logger.debug(f"Added individual word: '{word}'")
@@ -845,3 +674,98 @@ def rule_based_intent_detection(query: str) -> Dict[str, Any]:
 
     # Return the result
     return result
+
+
+def classify_query_intent_with_llm(
+    query: str, conversation_context: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Use LLM to understand the true intent of the user's query, especially for follow-ups and complex questions.
+
+    Args:
+        query: User's query string
+        conversation_context: Recent conversation history
+
+    Returns:
+        Dict with detailed intent classification
+    """
+    try:
+        from ...utils.llm_client import get_llm_client
+
+        llm_client = get_llm_client()
+
+        # Get recent conversation context for follow-up detection
+        recent_context = ""
+        if conversation_context and conversation_context.get("chat_history"):
+            recent_messages = conversation_context.get("chat_history", [])[
+                -4:
+            ]  # Last 4 messages
+            context_parts = []
+            for msg in recent_messages:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                if role and content:
+                    context_parts.append(f"{role.title()}: {content}")
+            recent_context = "\n".join(context_parts)
+
+        prompt = f"""Analyze this user query and classify its intent. Consider the recent conversation context.
+
+Recent Conversation:
+{recent_context if recent_context else "No recent context"}
+
+Current Query: "{query}"
+
+Classify the intent into ONE of these categories:
+
+1. **follow_up_question** - User is asking a specific question about something mentioned in recent conversation
+   - Examples: "is there a zoom link?", "what time is that?", "where is it located?"
+   - Look for: yes/no questions, detail requests about recent events/meetings
+
+2. **schedule_query** - User wants to see their calendar/schedule 
+   - Examples: "what do I have tomorrow?", "show me my schedule", "what's coming up?"
+
+3. **event_search** - User is searching for specific events
+   - Examples: "when is my dentist appointment?", "find my meeting with John"
+
+4. **availability_check** - User wants to know if they're free
+   - Examples: "am I free on Friday?", "do I have anything at 3pm?"
+
+5. **event_creation** - User wants to create/schedule something
+   - Examples: "schedule a meeting", "add an event", "book lunch tomorrow"
+
+6. **non_calendar** - Not related to calendar
+   - Examples: "hello", "how are you?", "what's the weather?"
+
+7. **time_date_query** - Asking about current time/date
+   - Examples: "what time is it?", "what day is today?"
+
+Respond with ONLY a JSON object:
+{{
+    "intent": "follow_up_question|schedule_query|event_search|availability_check|event_creation|non_calendar|time_date_query",
+    "confidence": 0.0-1.0,
+    "is_follow_up": true/false,
+    "question_type": "yes_no|specific_detail|open_ended|none",
+    "requested_detail": "zoom_link|location|time|date|description|none",
+    "reasoning": "brief explanation"
+}}"""
+
+        result = llm_client.get_completion(prompt)
+
+        # Parse the JSON response
+        import json
+
+        try:
+            intent_data = json.loads(result)
+            logger.debug(f"LLM intent classification: {intent_data}")
+            return intent_data
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse LLM response: {result}")
+            return {
+                "intent": "schedule_query",
+                "confidence": 0.5,
+                "is_follow_up": False,
+            }
+
+    except Exception as e:
+        logger.error(f"Error in LLM intent classification: {e}")
+        return {"intent": "schedule_query", "confidence": 0.5, "is_follow_up": False}

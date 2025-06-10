@@ -5,6 +5,7 @@ Intent processing functionality for the calendar assistant CLI.
 import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta, timezone
+import re
 
 from ..calendar.calendar_service import get_calendar_service, get_visible_calendars
 from ..calendar.event_management import (
@@ -13,7 +14,7 @@ from ..calendar.event_management import (
     delete_event,
     format_event_text,
 )
-from ..time.time_manager import parse_natural_language_datetime
+from ..time.time_manager import parse_natural_language_datetime, parse_time_range
 
 logger = logging.getLogger(__name__)
 
@@ -120,28 +121,47 @@ def process_search_events_intent(
     Returns:
         Response dictionary with search results
     """
-    # Force a longer time range for last/next occurrence queries
-    if is_find_last_occurrence or is_find_next_occurrence:
-        # Always use a full year for these queries
-        days_range = 365
-        logger.info(
-            f"Using extended time range of {days_range} days for occurrence search"
-        )
+    from ..calendar.event_retrieval import get_events_in_range
+    from datetime import datetime, timedelta
 
-    # Calculate time range
+    logger.debug(f"Processing search events intent")
+    logger.debug(f"Search terms: {search_terms}")
+    logger.debug(f"Days range: {days_range}")
+    logger.debug(f"Is past: {is_past}")
+    logger.debug(f"Specific date: {specific_date}")
+
+    # Check if this is a contextual follow-up asking for meeting details
+    is_meeting_detail_query = (
+        search_terms
+        and any(
+            word in query.lower()
+            for word in ["zoom", "link", "location", "details", "info", "information"]
+        )
+        and any(
+            word in " ".join(search_terms).lower()
+            for word in ["meeting", "call", "session"]
+        )
+    )
+
+    if is_meeting_detail_query:
+        # For meeting detail queries, search more broadly but focus on recent events
+        logger.debug("Detected meeting detail query - expanding search range")
+        days_range = min(days_range * 2, 30)  # Look a bit wider but cap at 30 days
+
+    # Determine the time range for search
+    now = datetime.now()
     if specific_date:
-        # When a specific date is mentioned, use only that exact date - don't use days_range
+        # Use the specific date boundaries
         start_time = specific_date.replace(hour=0, minute=0, second=0, microsecond=0)
         end_time = specific_date.replace(
             hour=23, minute=59, second=59, microsecond=999999
         )
-        # Set days_range to 0 to indicate exact date
-        days_range = 0
     elif time_info.get("date_range_start") and time_info.get("date_range_end"):
+        # Use explicit date range
         start_time = time_info["date_range_start"]
         end_time = time_info["date_range_end"]
     else:
-        now = datetime.now()
+        # Use days_range
         if is_past:
             end_time = now
             start_time = now - timedelta(days=days_range)
@@ -149,73 +169,85 @@ def process_search_events_intent(
             start_time = now
             end_time = now + timedelta(days=days_range)
 
-    # Format the date for displaying in response
-    date_display = ""
+    logger.debug(f"Searching events from {start_time} to {end_time}")
+
+    # Get events from calendar
+    events = get_events_in_range(start_time, end_time)
+    logger.debug(f"Found {len(events)} total events in range")
+
+    # ADDITIONAL FILTERING: When a specific date is requested, ensure events actually start on that date
     if specific_date:
-        date_display = specific_date.strftime("%A, %B %d, %Y")
-    elif start_time and end_time:
-        if (end_time - start_time).days <= 1:
-            # Just one day
-            date_display = start_time.strftime("%A, %B %d, %Y")
-        else:
-            # Date range
-            date_display = (
-                f"{start_time.strftime('%B %d')} to {end_time.strftime('%B %d, %Y')}"
-            )
+        filtered_events = []
+        target_date = specific_date.date()
 
-    # Call event fetching function
-    from ..calendar.event_retrieval import get_events_in_range
+        for event in events:
+            event_start = event.get("start", {})
 
-    events = get_events_in_range(
-        start_time,
-        end_time,
-        reverse_order=reverse_chronological,
-        calendar_id=specified_calendar,
-    )
+            # Get the event start date
+            if "dateTime" in event_start:
+                # Event has specific time
+                try:
+                    event_dt = datetime.fromisoformat(
+                        event_start["dateTime"].replace("Z", "")
+                    )
+                    event_date = event_dt.date()
+                except Exception:
+                    continue
+            elif "date" in event_start:
+                # All-day event
+                try:
+                    event_date = datetime.fromisoformat(event_start["date"]).date()
+                except Exception:
+                    continue
+            else:
+                continue
+
+            # Only include events that start on the requested date
+            if event_date == target_date:
+                filtered_events.append(event)
+
+        events = filtered_events
+        logger.debug(
+            f"Filtered to {len(events)} events for specific date {target_date}"
+        )
 
     # Filter events if search terms provided and no specific date/date range was identified
-    # When a specific date or date range is found, we don't need to filter by search terms
-    # that might include date references like "dec 8"
-    filtered_events = events
     if search_terms and not (
         specific_date
         or (time_info.get("date_range_start") and time_info.get("date_range_end"))
     ):
         filtered_events = []
+        search_terms_lower = [term.lower() for term in search_terms]
+
         for event in events:
-            event_text = f"{event.get('summary', '')} {event.get('description', '')}"
+            event_text = format_event_text(event)
+            if event_text:
+                event_text_lower = event_text.lower()
+                # Check if any search term appears in the event
+                if any(term in event_text_lower for term in search_terms_lower):
+                    filtered_events.append(event)
 
-            # Improve matching to support partial word matches and handle multiple search terms better
-            matches = False
-            event_text_lower = event_text.lower()
-
-            # First try exact phrase matching
-            if any(term.lower() in event_text_lower for term in search_terms):
-                matches = True
-            else:
-                # If no exact match, try word-by-word partial matching
-                for term in search_terms:
-                    # Split terms into individual words
-                    individual_words = [w for w in term.lower().split() if len(w) > 2]
-
-                    # See if any of these individual words match
-                    if individual_words and any(
-                        word in event_text_lower for word in individual_words
-                    ):
-                        matches = True
-                        logger.debug(
-                            f"Partial match found for term '{term}' in event: {event.get('summary')}"
-                        )
-                        break
-
-            if matches:
-                filtered_events.append(event)
-
+        events = filtered_events
         search_terms_display = ", ".join(search_terms)
     else:
         # When a date is specified, don't filter by search terms
         filtered_events = events
         search_terms_display = ""
+
+    # Format date for display
+    if specific_date:
+        date_display = specific_date.strftime("%A, %B %d, %Y")
+    elif time_info.get("date_range_start") and time_info.get("date_range_end"):
+        date_display = f"{time_info['date_range_start'].strftime('%B %d')} to {time_info['date_range_end'].strftime('%B %d, %Y')}"
+    else:
+        if is_past:
+            date_display = (
+                f"{start_time.strftime('%B %d')} to {end_time.strftime('%B %d, %Y')}"
+            )
+        else:
+            date_display = (
+                f"{start_time.strftime('%B %d')} to {end_time.strftime('%B %d, %Y')}"
+            )
 
     # Format for display
     formatted_events = []
@@ -226,6 +258,29 @@ def process_search_events_intent(
 
     # Create a conversational message
     if len(formatted_events) == 0:
+        # If no events found and using default 7-day range, offer to expand search
+        if (
+            not search_terms
+            and not specific_date
+            and not (
+                time_info.get("date_range_start") and time_info.get("date_range_end")
+            )
+            and days_range == 7
+        ):
+            direction = "past" if is_past else "next"
+            look_direction = "back" if is_past else "ahead"
+            return {
+                "status": "no_events_clarification_needed",
+                "message": f"I didn't find any events in the {direction} week. How far {look_direction} would you like me to look?",
+                "suggestion": "Try saying something like 'next 3 months', 'past 2 weeks', or 'entire year ahead'.",
+                "events": [],
+                "query": query,
+                "intent_type": "search_events",
+                "date": date_display,
+                "days_range": days_range,
+            }
+
+        # Regular no-events messages
         if search_terms and not (
             specific_date
             or (time_info.get("date_range_start") and time_info.get("date_range_end"))
@@ -497,3 +552,243 @@ def process_calendar_access_query_intent():
             "status": "error",
             "message": f"Failed to retrieve calendars: {str(e)}",
         }
+
+
+async def follow_up_question_handler(
+    query: str,
+    intent_data: Dict[str, Any],
+    conversation_context: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    Handle follow-up questions by providing specific answers to the user's exact question.
+
+    Args:
+        query: User's follow-up question
+        intent_data: Intent analysis data
+        conversation_context: Previous conversation context
+
+    Returns:
+        Specific answer to the user's question
+    """
+    try:
+        logger.debug(f"Processing follow-up question: {query}")
+
+        # Get recent events that might be relevant
+        calendar_service = GoogleCalendarService()
+
+        # Use broader time range to find context
+        time_info = parse_time_range("past 2 weeks to next 2 weeks")  # 4-week window
+
+        start_date = time_info.get("date_range_start") or datetime.now().replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(days=14)
+        end_date = time_info.get("date_range_end") or datetime.now().replace(
+            hour=23, minute=59, second=59, microsecond=999999
+        ) + timedelta(days=14)
+
+        # Get events from the broader range
+        events = await calendar_service.get_events(
+            start_date=start_date, end_date=end_date, max_results=100
+        )
+
+        # Look for context in recent conversation to understand what event they're asking about
+        target_event = None
+        search_context = []
+
+        if conversation_context and conversation_context.get("chat_history"):
+            recent_messages = conversation_context.get("chat_history", [])[
+                -4:
+            ]  # Last 4 messages
+            for msg in recent_messages:
+                if msg.get("role") == "assistant":
+                    content = msg.get("content", "").lower()
+                    search_context.extend(content.split())
+
+        # Try to find the most relevant event based on context and query
+        query_lower = query.lower()
+        query_terms = set(query_lower.split())
+
+        # Look for events that match names or terms mentioned in recent context
+        event_scores = []
+        for event in events:
+            score = 0
+            event_text = f"{event.get('summary', '')} {event.get('description', '')} {event.get('location', '')}".lower()
+
+            # Score based on query terms
+            for term in query_terms:
+                if len(term) > 2 and term in event_text:  # Only meaningful terms
+                    score += 2
+
+            # Score based on recent conversation context
+            for context_word in search_context:
+                if len(context_word) > 2 and context_word in event_text:
+                    score += 1
+
+            if score > 0:
+                event_scores.append((event, score))
+
+        # Sort by relevance and take the most relevant
+        event_scores.sort(key=lambda x: x[1], reverse=True)
+
+        if event_scores:
+            target_event = event_scores[0][0]
+            logger.debug(
+                f"Found target event: {target_event.get('summary')} (score: {event_scores[0][1]})"
+            )
+
+        # Answer based on the requested detail
+        requested_detail = intent_data.get("requested_detail", "none")
+        question_type = intent_data.get("question_type", "none")
+
+        if not target_event:
+            return "I'm not sure which specific event you're asking about. Could you provide more details?"
+
+        # Handle specific detail requests
+        if (
+            requested_detail == "zoom_link"
+            or "zoom" in query_lower
+            or "link" in query_lower
+        ):
+            # Look for zoom links in description, location, or conferenceData
+            zoom_info = extract_zoom_info(target_event)
+            if zoom_info:
+                event_name = target_event.get("summary", "your meeting")
+
+                # Check if it's a proper URL or just meeting info
+                if zoom_info.startswith("http"):
+                    if question_type == "yes_no":
+                        return (
+                            f"Yes! Here's the Zoom link for {event_name}: {zoom_info}"
+                        )
+                    else:
+                        return f"Here's the Zoom link for {event_name}: {zoom_info}"
+                else:
+                    # It's meeting ID or other zoom info
+                    if question_type == "yes_no":
+                        return (
+                            f"Yes! Here's the Zoom info for {event_name}: {zoom_info}"
+                        )
+                    else:
+                        return f"Here's the Zoom info for {event_name}: {zoom_info}"
+            else:
+                event_name = target_event.get("summary", "that meeting")
+                return f"No, I don't see a Zoom link for {event_name}."
+
+        elif (
+            requested_detail == "location"
+            or "where" in query_lower
+            or "location" in query_lower
+        ):
+            location = target_event.get("location", "")
+            event_name = target_event.get("summary", "your meeting")
+            if location:
+                if question_type == "yes_no":
+                    return f"Yes, {event_name} is at: {location}"
+                else:
+                    return f"{event_name} is at: {location}"
+            else:
+                return f"No location is specified for {event_name}."
+
+        elif (
+            requested_detail == "time" or "time" in query_lower or "when" in query_lower
+        ):
+            start_time = target_event.get("start", {})
+            event_name = target_event.get("summary", "your meeting")
+
+            if start_time:
+                # Format the time nicely
+                if "dateTime" in start_time:
+                    dt = datetime.fromisoformat(
+                        start_time["dateTime"].replace("Z", "+00:00")
+                    )
+                    formatted_time = dt.strftime("%A, %B %d, %Y at %I:%M %p")
+                    return f"{event_name} is on {formatted_time}."
+                elif "date" in start_time:
+                    dt = datetime.strptime(start_time["date"], "%Y-%m-%d")
+                    formatted_date = dt.strftime("%A, %B %d, %Y")
+                    return f"{event_name} is on {formatted_date} (all day)."
+
+            return f"I couldn't determine the time for {event_name}."
+
+        # Handle general questions about the event
+        else:
+            event_name = target_event.get("summary", "your meeting")
+            description = target_event.get("description", "")
+            location = target_event.get("location", "")
+
+            # Try to answer with available information
+            info_parts = []
+            if description:
+                info_parts.append(f"Description: {description}")
+            if location:
+                info_parts.append(f"Location: {location}")
+
+            zoom_info = extract_zoom_info(target_event)
+            if zoom_info:
+                info_parts.append(f"Zoom link: {zoom_info}")
+
+            if info_parts:
+                return f"Here's what I know about {event_name}:\n\n" + "\n".join(
+                    info_parts
+                )
+            else:
+                return (
+                    f"I found {event_name} but don't have additional details available."
+                )
+
+    except Exception as e:
+        logger.error(f"Error in follow-up question handler: {e}")
+        return "I'm having trouble finding the information you're looking for. Could you be more specific?"
+
+
+def extract_zoom_info(event: Dict[str, Any]) -> Optional[str]:
+    """Extract Zoom meeting information from an event."""
+
+    # Define improved zoom link patterns
+    zoom_patterns = [
+        r"https://[\w-]+\.zoom\.us/j/[\d\w?=&%\-\.]+",
+        r"https://[\w-]+\.zoom\.us/s/[\d\w?=&%\-\.]+",
+        r"https://[\w-]+\.zoom\.us/meeting/[\d\w?=&%\-\.]+",
+        r"zoom\.us/j/[\d\w?=&%\-\.]+",
+        r"zoom\.us/s/[\d\w?=&%\-\.]+",
+        r"https://us\d+\.zoom\.us/j/[\d\w?=&%\-\.]+",
+        r"Join Zoom Meeting\s*\n?\s*(https://[^\s]+)",
+    ]
+
+    # Check description first
+    description = event.get("description", "")
+    if description:
+        for pattern in zoom_patterns:
+            match = re.search(pattern, description, re.IGNORECASE)
+            if match:
+                # Return just the URL, not any surrounding text
+                url = match.group(1) if match.groups() else match.group(0)
+                return url.strip()
+
+    # Check location field - this is often where zoom links are placed
+    location = event.get("location", "")
+    if location:
+        # First try to extract a proper zoom URL from location
+        for pattern in zoom_patterns:
+            match = re.search(pattern, location, re.IGNORECASE)
+            if match:
+                # Return just the URL, not any surrounding text
+                url = match.group(1) if match.groups() else match.group(0)
+                return url.strip()
+
+        # If no proper URL found but location contains zoom-like text, return the location
+        # This handles cases like "Zoom Meeting ID: 123-456-789" or custom zoom references
+        if any(word in location.lower() for word in ["zoom", "meet", "webex", "teams"]):
+            return location.strip()
+
+    # Check conference data
+    conference_data = event.get("conferenceData", {})
+    if conference_data:
+        entry_points = conference_data.get("entryPoints", [])
+        for entry_point in entry_points:
+            if entry_point.get("entryPointType") == "video":
+                uri = entry_point.get("uri", "")
+                if uri:
+                    return uri.strip()
+
+    return None
