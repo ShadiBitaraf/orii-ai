@@ -1,0 +1,80 @@
+# Git
+.git/
+.gitignore
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# Logs
+*.log
+logs/
+orii_demo.log
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Development files
+debug_*.py
+test_*.py
+*_debug.py
+*_test.py
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Context storage (local development only)
+context_cache/
+
+# Chrome Extension Development
+node_modules/
+frontend/interfaces/extension/node_modules/
+frontend/interfaces/extension/dist/
+frontend/interfaces/extension/*.zip
+frontend/interfaces/extension/*.crx
+frontend/interfaces/extension/*.pem
+
+# Documentation
+README.md
+BUG_FIXES_SUMMARY.md
+REACT_INTEGRATION_COMPLETE.md
+V0_context.txt
+
+# Shell scripts
+run_orii_demo.sh
+
+# Security files
+*.pem
+credentials.json
+token.json 
