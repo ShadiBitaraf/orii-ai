@@ -69,6 +69,7 @@ ehthumbs.db
 Thumbs.db
 
 # Chrome Extension Development
+node_modules/
 frontend/interfaces/extension/node_modules/
 frontend/interfaces/extension/dist/
 frontend/interfaces/extension/*.zip
