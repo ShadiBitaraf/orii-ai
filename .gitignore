@@ -92,3 +92,4 @@ context_cache/
 
 # Security - Extension signing keys  
 *.pem
+frontend/interfaces/extension/manifest.json

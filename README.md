@@ -49,6 +49,17 @@
 4. **Go to** calendar.google.com
 5. **Click** the ORII button → Start chatting!
 
+### **🌐 Access URLs**
+
+| Interface                | URL                                                             | Status      | Description                          |
+| ------------------------ | --------------------------------------------------------------- | ----------- | ------------------------------------ |
+| **📦 Extension Install** | https://orii-ai-production.up.railway.app/install               | ✅ **Live** | Download and installation guide      |
+| **🏥 Health Check**      | https://orii-ai-production.up.railway.app/health                | ✅ **Live** | API status and system info           |
+| **🧪 API Testing**       | https://orii-ai-production.up.railway.app/debug/routes          | ✅ **Live** | Available routes and endpoints       |
+| **💬 Web Interface**     | https://orii-ai-production.up.railway.app/chat                  | 🚧 **WIP**  | Standalone web chat (in development) |
+| **📊 Context API**       | https://orii-ai-production.up.railway.app/api/context/{session} | ✅ **Live** | Session context debugging            |
+| **🧹 Admin Cleanup**     | https://orii-ai-production.up.railway.app/api/cleanup           | ✅ **Live** | Manual context cleanup               |
+
 ### **🔧 For Developers**
 
 ```bash
@@ -120,6 +131,19 @@ frontend/interfaces/extension/
 └── sidebar.html            # React UI entry point
 ```
 
+### **🌐 Web Interface**
+
+```
+frontend/interfaces/web/
+├── index.html              # Standalone web wrapper
+├── README.md              # Web interface documentation
+└── __init__.py            # Python package marker
+
+# Reuses extension React components via iframe
+# Direct API communication with Flask backend
+# Status: 🚧 Work in Progress
+```
+
 ---
 
 ## 💬 **Example Interactions**
@@ -170,7 +194,7 @@ curl -X POST http://localhost:8080/api/query \
 
 # Frontend testing
 # Extension: Load in Chrome at chrome://extensions/
-# Web UI: Visit http://localhost:8080/chat
+# Web UI: Visit http://localhost:8080/chat (🚧 Work in Progress)
 ```
 
 ### **🚀 Deployment**
@@ -269,6 +293,7 @@ MAX_QUERIES_PER_SESSION=10
 
 ### **Next Features**
 
+- **Web Interface** completion (🚧 High Priority)
 - **Dark mode** support
 - **Voice input** capabilities
 - **Calendar widgets** in React
@@ -289,6 +314,7 @@ MAX_QUERIES_PER_SESSION=10
 
 - **[Integration Summary](./INTEGRATION_SUMMARY.md)** - Original UI integration
 - **[React Integration](./REACT_INTEGRATION_COMPLETE.md)** - Complete React setup
+- **[Web Interface](./frontend/interfaces/web/README.md)** - Standalone web version details
 - **[V0 Context](./V0_context.txt)** - Project development history
 - **[Bug Fixes](./BUG_FIXES_SUMMARY.md)** - Recent improvements
 

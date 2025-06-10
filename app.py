@@ -68,7 +68,7 @@ try:
 
     # Create context storage instance
     context_storage = create_context_storage(
-        backend=CONTEXT_BACKEND, max_queries=MAX_QUERIES_PER_SESSION
+        backend=CONTEXT_BACKEND, max_queries=5  # Only keep last 5 messages
     )
 
     print(
@@ -106,14 +106,8 @@ def get_conversation_context(session_id: str) -> dict:
                 "chat_history": [],
             }
 
-            # Convert queries to chat_history format
-            for query_entry in context.get("queries", []):
-                legacy_context["chat_history"].extend(
-                    [
-                        {"role": "user", "content": query_entry["query"]},
-                        {"role": "assistant", "content": query_entry["response"]},
-                    ]
-                )
+            # Use simplified messages format
+            legacy_context["chat_history"] = context.get("messages", [])
 
             return legacy_context
 
@@ -493,8 +487,8 @@ def get_context_info(session_id: str):
                     "status": "success",
                     "session_id": session_id,
                     "backend": CONTEXT_BACKEND,
-                    "query_count": len(context.get("queries", [])),
-                    "max_queries": MAX_QUERIES_PER_SESSION,
+                    "message_count": len(context.get("messages", [])),
+                    "max_messages": 10,  # 5 exchanges = 10 messages
                     "last_updated": context.get("updated_at"),
                     "recent_summary": summary,
                 }
@@ -508,9 +502,8 @@ def get_context_info(session_id: str):
                 "status": "success",
                 "session_id": session_id,
                 "backend": "memory",
-                "query_count": len(context.get("chat_history", []))
-                // 2,  # Divide by 2 since it's user+assistant pairs
-                "max_queries": "unlimited",
+                "message_count": len(context.get("chat_history", [])),
+                "max_messages": 10,
             }
         )
 
@@ -615,9 +608,7 @@ if __name__ == "__main__":
     print(
         f"📊 Context Backend: {CONTEXT_BACKEND if ENHANCED_STORAGE_AVAILABLE else 'memory'}"
     )
-    print(
-        f"🔢 Max Queries per Session: {MAX_QUERIES_PER_SESSION if ENHANCED_STORAGE_AVAILABLE else 'unlimited'}"
-    )
+    print(f"🔢 Max Messages: 5")
 
     # Railway deployment configuration
     port = int(os.getenv("PORT", 8080))  # Railway typically uses 8080
