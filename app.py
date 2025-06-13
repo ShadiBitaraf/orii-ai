@@ -5,11 +5,15 @@ initial Flask web interface for future development
 from flask import Flask, request, jsonify, render_template, send_from_directory  # type: ignore
 from flask_cors import CORS  # type: ignore
 import os
-
 import sys
 import json
 import traceback
 from datetime import datetime, timedelta
+from hypercorn.asyncio import serve
+from hypercorn.config import Config
+import asyncio
+import logging
+import time
 
 # Load environment variables from .env file
 try:
@@ -53,6 +57,8 @@ except Exception as e:
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # **ENHANCED CONTEXT STORAGE** - Multiple backend support
 try:
@@ -100,14 +106,39 @@ def get_conversation_context(session_id: str) -> dict:
             legacy_context = {
                 "last_intent": context.get("last_intent"),
                 "last_response": context.get("last_response"),
-                "last_time_direction": None,  # Will be populated dynamically
-                "last_search_type": None,  # Will be populated dynamically
-                "last_events_found": [],  # Will be populated dynamically
-                "chat_history": [],
+                "last_time_direction": context.get("last_time_direction"),
+                "last_search_type": context.get("last_search_type"),
+                "last_events_found": context.get("last_events_found", []),
+                "chat_history": context.get("messages", []),
+                "time_context": {
+                    "last_time_direction": context.get("last_time_direction"),
+                    "last_search_type": context.get("last_search_type"),
+                    "last_events_found": context.get("last_events_found", []),
+                    "last_query": context.get("last_query"),
+                    "last_response": context.get("last_response"),
+                },
             }
 
-            # Use simplified messages format
-            legacy_context["chat_history"] = context.get("messages", [])
+            # Extract time context from chat history if available
+            if legacy_context["chat_history"]:
+                for msg in reversed(legacy_context["chat_history"]):
+                    if msg["role"] == "assistant":
+                        content = msg["content"]
+                        # Look for date/time information
+                        if (
+                            "today is" in content.lower()
+                            or "current time" in content.lower()
+                        ):
+                            import re
+
+                            date_match = re.search(
+                                r"([A-Za-z]+, [A-Za-z]+ \d+, \d{4})", content
+                            )
+                            if date_match:
+                                legacy_context["time_context"]["last_date"] = (
+                                    date_match.group(1)
+                                )
+                                break
 
             return legacy_context
 
@@ -123,6 +154,14 @@ def get_conversation_context(session_id: str) -> dict:
                     "last_search_type": None,
                     "last_events_found": [],
                     "chat_history": [],
+                    "time_context": {
+                        "last_time_direction": None,
+                        "last_search_type": None,
+                        "last_events_found": [],
+                        "last_query": None,
+                        "last_response": None,
+                        "last_date": None,
+                    },
                 },
             )
     else:
@@ -135,6 +174,14 @@ def get_conversation_context(session_id: str) -> dict:
                 "last_search_type": None,
                 "last_events_found": [],
                 "chat_history": [],
+                "time_context": {
+                    "last_time_direction": None,
+                    "last_search_type": None,
+                    "last_events_found": [],
+                    "last_query": None,
+                    "last_response": None,
+                    "last_date": None,
+                },
             }
         return conversation_contexts[session_id]
 
@@ -427,27 +474,36 @@ def simple_debug_routes():
 
 
 @app.route("/api/query", methods=["POST"])
-def api_query():
-    """API endpoint to process a query with enhanced context storage"""
-    data = request.json
-    query = data.get("query", "")
-    session_id = data.get("session_id", "default")
-
-    # Get conversation context (from enhanced storage or memory)
-    conversation_context = get_conversation_context(session_id)
-
+async def api_query():
+    """API endpoint for processing queries"""
+    start_time = time.time()
     try:
-        # Process the query using our modified function
-        response, updated_context = process_query(query, conversation_context)
+        data = request.get_json()
+        query = data.get("query", "")
+        session_id = data.get("session_id", "default")
+
+        logger.info(f"Processing query: {query} for session: {session_id}")
+
+        # Get conversation context (from enhanced storage or memory)
+        conversation_context = get_conversation_context(session_id)
+
+        # Process using the ORII demo logic
+        response, updated_context = await process_query(query, conversation_context)
 
         # Save the updated conversation context with the new system
         save_conversation_context(session_id, updated_context, query, response)
+
+        duration = time.time() - start_time
+        logger.info(f"Performance [api_query] - success - {duration:.2f}s")
 
         return jsonify(
             {
                 "status": "success",
                 "response": response,
                 "timestamp": datetime.now().isoformat(),
+                "performance": {
+                    "total_duration": f"{duration:.2f}s",
+                },
                 "context_info": {
                     "backend": (
                         CONTEXT_BACKEND if ENHANCED_STORAGE_AVAILABLE else "memory"
@@ -460,17 +516,22 @@ def api_query():
                 },
             }
         )
+
     except Exception as e:
-        traceback.print_exc()
-        return (
-            jsonify(
-                {
-                    "status": "error",
-                    "error": str(e),
-                    "timestamp": datetime.now().isoformat(),
-                }
-            ),
-            500,
+        duration = time.time() - start_time
+        logger.error(f"Error processing query: {str(e)}")
+        logger.info(
+            f"Performance [api_query] - error - {duration:.2f}s - Error: {str(e)}"
+        )
+        return jsonify(
+            {
+                "status": "error",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat(),
+                "performance": {
+                    "total_duration": f"{duration:.2f}s",
+                },
+            }
         )
 
 
@@ -598,22 +659,13 @@ def clear_logs():
 
 
 if __name__ == "__main__":
-    # Create templates directory if it doesn't exist
-    os.makedirs("templates", exist_ok=True)
+    # Create necessary directories
+    os.makedirs("logs", exist_ok=True)
+    os.makedirs("data", exist_ok=True)
 
-    # Create static directory if it doesn't exist
-    os.makedirs("static", exist_ok=True)
+    # Configure Hypercorn
+    config = Config()
+    config.bind = ["0.0.0.0:8080"]
 
-    print(f"🚀 Starting ORII Calendar Assistant")
-    print(
-        f"📊 Context Backend: {CONTEXT_BACKEND if ENHANCED_STORAGE_AVAILABLE else 'memory'}"
-    )
-    print(f"🔢 Max Messages: 5")
-
-    # Railway deployment configuration
-    port = int(os.getenv("PORT", 8080))  # Railway typically uses 8080
-    host = "0.0.0.0"  # Bind to all interfaces for Railway
-
-    print(f"🌐 Server starting on {host}:{port}")
-    print(f"🚀 ORII Calendar Assistant ready!")
-    app.run(debug=False, host=host, port=port, threaded=True)
+    # Run the app with Hypercorn
+    asyncio.run(serve(app, config))

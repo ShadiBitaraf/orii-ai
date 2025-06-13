@@ -4,8 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from datetime import timedelta, datetime
 from typing import Any
+import logging
+import os
 
-# import logging
 # import sys
 
 from backend.app.database import Base, engine, get_db
@@ -21,6 +22,8 @@ from backend.app.utils.security import (
 from backend.app.api import calendar
 from backend.app.core.config import get_settings
 from backend.app.utils.logger import get_logger
+from backend.app.core.intent.intent_processor import process_intent
+from backend.app.core.intent.intent_detection import determine_query_intent
 
 # Setup logger for this module
 logger = get_logger("app.main")
@@ -166,59 +169,37 @@ def read_current_user(current_user: models.User = Depends(get_current_user)) -> 
 
 # Chat query endpoint for Chrome extension
 @app.post("/api/query", tags=["chat"])
-async def process_query(request: Request, db: Session = Depends(get_db)):
+async def process_query(request: dict, db: Session = Depends(get_db)):
     """Process chat query from Chrome extension"""
     try:
         # Parse request body
-        body = await request.json()
-        query = body.get("query", "")
-        session_id = body.get("session_id", "default")
+        query = request.get("query", "")
+        session_id = request.get("session_id", "default")
 
         logger.info(f"Processing query: {query} for session: {session_id}")
 
-        # Import the ORII processing logic
         # Simple in-memory context storage (replace with Redis if needed)
         conversation_context = {"chat_history": []}
 
-        # Process using the ORII demo logic
-        import sys
-        import os
+        # Determine intent
+        intent_data = determine_query_intent(query, conversation_context)
 
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        root_dir = os.path.dirname(os.path.dirname(current_dir))
-        sys.path.insert(0, root_dir)
-
-        # Import the main processing function from orii_demo
-        from orii_demo import get_intent_response, format_chatbot_response
-
-        # Process the query
-        response_data = get_intent_response(query, conversation_context)
-        formatted_response = format_chatbot_response(response_data)
-
-        # Update context with the interaction
-        if not conversation_context:
-            conversation_context = {"chat_history": []}
-
-        conversation_context["chat_history"].append({"role": "user", "content": query})
-        conversation_context["chat_history"].append(
-            {"role": "assistant", "content": formatted_response}
+        # Process intent
+        response = await process_intent(
+            intent_data=intent_data,
+            query=query,
+            conversation_context=conversation_context,
         )
-
-        # Note: Context is not persisted (in-memory only)
 
         return {
             "status": "success",
-            "response": formatted_response,
+            "response": response.get("response", ""),
             "timestamp": datetime.now().isoformat(),
         }
 
     except Exception as e:
         logger.error(f"Error processing query: {str(e)}")
-        return {
-            "status": "error",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat(),
-        }
+        raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
 
 
 # Health check endpoint (used for checking the API health)
@@ -236,9 +217,14 @@ if __name__ == "__main__":
     import uvicorn
 
     # logger.info("Starting development server...")
+    # Create necessary directories
+    os.makedirs("logs", exist_ok=True)
+    os.makedirs("data", exist_ok=True)
+
+    # Run the app with uvicorn
     uvicorn.run(
         "backend.app.main:app",
-        host="127.0.0.1",
+        host="0.0.0.0",
         port=8000,
         reload=True,
         log_level="debug",

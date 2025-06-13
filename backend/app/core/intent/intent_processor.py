@@ -3,6 +3,7 @@ Intent processing functionality for the calendar assistant CLI.
 """
 
 import logging
+import time
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta, timezone
 import re
@@ -15,80 +16,287 @@ from ..calendar.event_management import (
     format_event_text,
 )
 from ..time.time_manager import parse_natural_language_datetime, parse_time_range
+from ...utils.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
 
-def process_intent(
-    intent_type,
-    is_past,
-    days_range,
-    reverse_chronological,
-    specific_date,
-    search_terms,
-    query,
-    time_info,
-    specified_calendar,
-    is_find_last_occurrence=False,
-    is_find_next_occurrence=False,
+def log_performance(
+    operation: str, start_time: float, success: bool = True, error: str = None
 ):
-    """Process the detected intent and return a response.
+    """Log performance metrics for an operation"""
+    duration = time.time() - start_time
+    status = "success" if success else "error"
+    error_msg = f" - Error: {error}" if error else ""
+    logger.info(f"Performance [{operation}] - {status} - {duration:.2f}s{error_msg}")
 
-    Args:
-        intent_type: Type of intent detected
-        is_past: Whether this is a query about past events
-        days_range: Number of days to look ahead/back
-        reverse_chronological: Whether to return events in reverse chronological order
-        specific_date: Specific date to search for
-        search_terms: Terms to search for
-        query: Original query string
-        time_info: Additional time information
-        specified_calendar: Specific calendar to search
-        is_find_last_occurrence: Whether to find the last occurrence
-        is_find_next_occurrence: Whether to find the next occurrence
 
-    Returns:
-        Response dictionary
-    """
+async def generate_llm_response(prompt: str) -> str:
+    """Generate a response using the LLM."""
+    start_time = time.time()
     try:
-        if intent_type == "search_events":
-            return process_search_events_intent(
-                is_past,
-                days_range,
-                reverse_chronological,
-                specific_date,
-                search_terms,
-                query,
-                time_info,
-                specified_calendar,
-                is_find_last_occurrence,
-                is_find_next_occurrence,
-            )
-        elif intent_type == "create_event":
-            return process_create_event_intent(query, time_info)
-        elif intent_type == "update_event":
-            return process_update_event_intent(query, search_terms, time_info)
-        elif intent_type == "delete_event":
-            return process_delete_event_intent(query, search_terms)
-        elif intent_type == "get_event_details":
-            return process_get_event_details_intent(query, search_terms)
-        elif intent_type == "list_calendars" or intent_type == "calendar_access_query":
-            return process_calendar_access_query_intent()
-        elif intent_type == "time_date":
-            return process_time_date_intent(query, specific_date)
-        elif intent_type == "greeting":
-            return process_greeting_intent(query)
-        else:
-            logger.warning(f"Unknown intent type: {intent_type}")
-            return {
-                "status": "error",
-                "message": f"I'm not sure how to handle that request. Intent '{intent_type}' is not supported.",
-            }
+        llm_client = get_llm_client()
+        response = llm_client.get_completion(prompt, model="gpt-4")
+        log_performance("llm_response", start_time)
+        return response.strip()
     except Exception as e:
-        logger.error(f"Error processing intent: {e}")
+        log_performance("llm_response", start_time, False, str(e))
+        logger.error(f"Error generating LLM response: {str(e)}")
+        return "I'm here to help you manage your calendar. What would you like to do?"
+
+
+async def get_calendar_data(
+    is_past: bool,
+    days_range: int,
+    reverse_chronological: bool,
+    specific_date: Optional[datetime],
+    date_range_start: Optional[datetime],
+    date_range_end: Optional[datetime],
+    specified_calendar: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Get calendar data based on the provided parameters."""
+    start_time = time.time()
+    try:
+        service = get_calendar_service()
+        if not service:
+            log_performance(
+                "calendar_service", start_time, False, "Failed to get calendar service"
+            )
+            logger.error("Failed to get calendar service")
+            return []
+
+        # Calculate time range
+        now = datetime.now(timezone.utc)
+        if specific_date:
+            start_time_range = specific_date
+            end_time_range = specific_date + timedelta(days=1)
+        elif date_range_start and date_range_end:
+            start_time_range = date_range_start
+            end_time_range = date_range_end
+        else:
+            if is_past:
+                start_time_range = now - timedelta(days=days_range)
+                end_time_range = now
+            else:
+                start_time_range = now
+                end_time_range = now + timedelta(days=days_range)
+
+        # Get events using the calendar service
+        from ..calendar.event_retrieval import get_events_in_range
+
+        events = get_events_in_range(
+            start_time=start_time_range,
+            end_time=end_time_range,
+            max_total_results=50,
+            reverse_order=reverse_chronological,
+            calendar_id=specified_calendar,
+        )
+
+        log_performance("calendar_data", start_time)
+        return events
+    except Exception as e:
+        log_performance("calendar_data", start_time, False, str(e))
+        logger.error(f"Error getting calendar data: {str(e)}")
+        return []
+
+
+async def process_intent(
+    intent_data: Dict[str, Any], query: str, conversation_context: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Process the detected intent and generate appropriate response.
+    """
+    start_time = time.time()
+    try:
+        # Handle event creation
+        if intent_data.get("intent_type") == "create_event":
+            try:
+                # Get calendar service
+                service = get_calendar_service()
+
+                # Extract event details from intent data
+                event_details = intent_data.get("event_details", {})
+
+                # Create the event
+                created_event = create_event(service, event_details)
+
+                # Generate a natural response about the created event
+                prompt = f"""The user asked to create an event. Here are the details of the created event: {created_event}
+                Generate a natural, conversational response confirming the event creation.
+                Keep the response friendly and helpful."""
+
+                response = await generate_llm_response(prompt)
+                log_performance("process_intent", start_time)
+                return {
+                    "response": response,
+                    "needs_calendar_data": False,
+                    "intent_type": "create_event",
+                    "calendar_data": created_event,
+                    "time_info": {},
+                    "llm_classification": intent_data.get("llm_classification", {}),
+                }
+            except Exception as e:
+                logger.error(f"Error creating event: {e}")
+                return {
+                    "response": f"I apologize, but I encountered an error while creating the event: {str(e)}. Please try again.",
+                    "needs_calendar_data": False,
+                    "intent_type": "error",
+                    "time_info": {},
+                    "llm_classification": intent_data.get("llm_classification", {}),
+                }
+
+        # Handle follow-up questions first
+        if intent_data.get("is_follow_up", False):
+            # Get the last date from conversation context
+            last_date = None
+            if conversation_context and conversation_context.get("chat_history"):
+                for msg in reversed(conversation_context["chat_history"]):
+                    if msg.get("role") == "assistant":
+                        content = msg.get("content", "").lower()
+                        # Look for date information in the last response
+                        if (
+                            "july" in content
+                            or "august" in content
+                            or "september" in content
+                        ):
+                            import re
+
+                            date_match = re.search(
+                                r"([A-Za-z]+, [A-Za-z]+ \d+, \d{4})",
+                                msg.get("content", ""),
+                            )
+                            if date_match:
+                                last_date = datetime.strptime(
+                                    date_match.group(1), "%A, %B %d, %Y"
+                                )
+                                break
+
+            # If we found a last date, calculate the new date based on the follow-up
+            if last_date:
+                # Handle "day after" or similar follow-ups
+                if "day after" in query.lower() or "next day" in query.lower():
+                    new_date = last_date + timedelta(days=1)
+                elif "day before" in query.lower() or "previous day" in query.lower():
+                    new_date = last_date - timedelta(days=1)
+                else:
+                    # Default to next day for simple follow-ups
+                    new_date = last_date + timedelta(days=1)
+
+                # Get events for the new date
+                calendar_data = await get_calendar_data(
+                    is_past=False,
+                    days_range=1,
+                    reverse_chronological=False,
+                    specific_date=new_date,
+                    date_range_start=None,
+                    date_range_end=None,
+                    specified_calendar=None,
+                )
+
+                # Use LLM to generate a natural response about the calendar data
+                prompt = f"""The user asked about the day after their previous query. Here is their calendar data for {new_date.strftime('%A, %B %d, %Y')}: {calendar_data}
+                Generate a natural, conversational response that answers their question using the calendar data.
+                Keep the response friendly and helpful."""
+
+                response = await generate_llm_response(prompt)
+                log_performance("process_intent", start_time)
+                return {
+                    "response": response,
+                    "needs_calendar_data": True,
+                    "intent_type": "search_events",
+                    "calendar_data": calendar_data,
+                    "time_info": {"specific_date": new_date},
+                    "llm_classification": intent_data.get("llm_classification", {}),
+                }
+
+        # Handle general chat and greetings
+        if intent_data.get("intent_type") == "greeting":
+            # Use LLM to generate a natural response
+            prompt = f"""You are a friendly calendar assistant. The user has greeted you with: "{query}"
+            Generate a warm, natural response that acknowledges their greeting and invites them to ask about their calendar.
+            Keep the response concise and friendly."""
+
+            response = await generate_llm_response(prompt)
+            log_performance("process_intent", start_time)
+            return {
+                "response": response,
+                "needs_calendar_data": False,
+                "intent_type": "greeting",
+                "time_info": {},
+                "llm_classification": intent_data.get("llm_classification", {}),
+            }
+
+        # Handle calendar access queries
+        if intent_data.get("intent_type") == "calendar_access_query":
+            # Use LLM to generate a natural response about calendar access
+            prompt = f"""The user has asked about calendar access with the query: "{query}"
+            Generate a natural response explaining that you can access their Google Calendar and help them find events.
+            Keep the response friendly and informative."""
+
+            response = await generate_llm_response(prompt)
+            log_performance("process_intent", start_time)
+            return {
+                "response": response,
+                "needs_calendar_data": False,
+                "intent_type": "calendar_access_query",
+                "time_info": {},
+                "llm_classification": intent_data.get("llm_classification", {}),
+            }
+
+        # For calendar searches, use the existing logic
+        if intent_data.get("needs_calendar_data", False):
+            # Get calendar data
+            calendar_data = await get_calendar_data(
+                intent_data.get("is_past", False),
+                intent_data.get("days_range", 7),
+                intent_data.get("reverse_chronological", False),
+                intent_data.get("specific_date"),
+                intent_data.get("date_range_start"),
+                intent_data.get("date_range_end"),
+                intent_data.get("specified_calendar"),
+            )
+
+            # Use LLM to generate a natural response about the calendar data
+            prompt = f"""The user asked: "{query}"
+            Here is their calendar data: {calendar_data}
+            Generate a natural, conversational response that answers their question using the calendar data.
+            Keep the response friendly and helpful."""
+
+            response = await generate_llm_response(prompt)
+            log_performance("process_intent", start_time)
+            return {
+                "response": response,
+                "needs_calendar_data": True,
+                "intent_type": "search_events",
+                "calendar_data": calendar_data,
+                "time_info": intent_data.get("time_info", {}),
+                "llm_classification": intent_data.get("llm_classification", {}),
+            }
+
+        # For any other intents, use LLM to generate a natural response
+        prompt = f"""The user asked: "{query}"
+        Generate a natural, helpful response that acknowledges their question and offers assistance.
+        Keep the response friendly and concise."""
+
+        response = await generate_llm_response(prompt)
+        log_performance("process_intent", start_time)
         return {
-            "status": "error",
-            "message": f"An error occurred while processing your request: {str(e)}",
+            "response": response,
+            "needs_calendar_data": False,
+            "intent_type": intent_data.get("intent_type", "general"),
+            "time_info": intent_data.get("time_info", {}),
+            "llm_classification": intent_data.get("llm_classification", {}),
+        }
+
+    except Exception as e:
+        log_performance("process_intent", start_time, False, str(e))
+        logger.error(f"Error processing intent: {str(e)}")
+        return {
+            "response": "I apologize, but I encountered an error while processing your request. Could you please try again?",
+            "needs_calendar_data": False,
+            "intent_type": "error",
+            "time_info": {},
+            "llm_classification": intent_data.get("llm_classification", {}),
         }
 
 
@@ -573,11 +781,100 @@ async def follow_up_question_handler(
     try:
         logger.debug(f"Processing follow-up question: {query}")
 
-        # Get recent events that might be relevant
-        calendar_service = GoogleCalendarService()
+        # Extract time context from the intent data
+        time_context = intent_data.get("time_context", {})
+        last_time_direction = time_context.get("last_time_direction")
+        last_query = time_context.get("last_query", "")
+        last_response = time_context.get("last_response", "")
 
-        # Use broader time range to find context
-        time_info = parse_time_range("past 2 weeks to next 2 weeks")  # 4-week window
+        # Handle time-based follow-ups
+        time_indicators = {
+            "next": 1,
+            "after": 1,
+            "later": 1,
+            "previous": -1,
+            "before": -1,
+            "earlier": -1,
+            "last": -1,
+            "first": -1,
+        }
+
+        query_lower = query.lower()
+        time_shift = 0
+        time_unit = "day"
+
+        # Check for time shift indicators
+        for indicator, shift in time_indicators.items():
+            if indicator in query_lower:
+                time_shift = shift
+                # Check for time unit
+                if "week" in query_lower:
+                    time_unit = "week"
+                elif "month" in query_lower:
+                    time_unit = "month"
+                elif "year" in query_lower:
+                    time_unit = "year"
+                break
+
+        # If we found a time shift, calculate the new date
+        if time_shift != 0:
+            from datetime import datetime, timedelta
+
+            current_date = datetime.now()
+
+            if time_unit == "day":
+                new_date = current_date + timedelta(days=time_shift)
+            elif time_unit == "week":
+                new_date = current_date + timedelta(weeks=time_shift)
+            elif time_unit == "month":
+                # Approximate month as 30 days
+                new_date = current_date + timedelta(days=30 * time_shift)
+            elif time_unit == "year":
+                new_date = current_date + timedelta(days=365 * time_shift)
+
+            # Format the response
+            formatted_date = new_date.strftime("%A, %B %d, %Y")
+            return f"{formatted_date}"
+
+        # If no time shift found, try to find context in recent conversation
+        if conversation_context and conversation_context.get("chat_history"):
+            recent_messages = conversation_context.get("chat_history", [])[
+                -4:
+            ]  # Last 4 messages
+            for msg in recent_messages:
+                if msg.get("role") == "assistant":
+                    content = msg.get("content", "").lower()
+                    # Look for date/time information in the last response
+                    if "today is" in content or "current time" in content:
+                        # Extract the date from the previous response
+                        import re
+
+                        date_match = re.search(
+                            r"([A-Za-z]+, [A-Za-z]+ \d+, \d{4})", msg.get("content", "")
+                        )
+                        if date_match:
+                            base_date = datetime.strptime(
+                                date_match.group(1), "%A, %B %d, %Y"
+                            )
+                            # Apply the time shift
+                            if time_shift != 0:
+                                if time_unit == "day":
+                                    new_date = base_date + timedelta(days=time_shift)
+                                elif time_unit == "week":
+                                    new_date = base_date + timedelta(weeks=time_shift)
+                                elif time_unit == "month":
+                                    new_date = base_date + timedelta(
+                                        days=30 * time_shift
+                                    )
+                                elif time_unit == "year":
+                                    new_date = base_date + timedelta(
+                                        days=365 * time_shift
+                                    )
+                                return new_date.strftime("%A, %B %d, %Y")
+
+        # If we couldn't determine the date, try to get events from calendar
+        calendar_service = get_calendar_service()
+        time_info = parse_time_range("past 2 weeks to next 2 weeks")
 
         start_date = time_info.get("date_range_start") or datetime.now().replace(
             hour=0, minute=0, second=0, microsecond=0
@@ -586,155 +883,32 @@ async def follow_up_question_handler(
             hour=23, minute=59, second=59, microsecond=999999
         ) + timedelta(days=14)
 
-        # Get events from the broader range
         events = await calendar_service.get_events(
             start_date=start_date, end_date=end_date, max_results=100
         )
 
-        # Look for context in recent conversation to understand what event they're asking about
-        target_event = None
-        search_context = []
+        # If we have events, try to find the most relevant one
+        if events:
+            # Sort events by start time
+            events.sort(key=lambda x: x.get("start", {}).get("dateTime", ""))
 
-        if conversation_context and conversation_context.get("chat_history"):
-            recent_messages = conversation_context.get("chat_history", [])[
-                -4:
-            ]  # Last 4 messages
-            for msg in recent_messages:
-                if msg.get("role") == "assistant":
-                    content = msg.get("content", "").lower()
-                    search_context.extend(content.split())
+            # If asking about next/previous, return the next/previous event
+            if time_shift > 0:
+                for event in events:
+                    if (
+                        event.get("start", {}).get("dateTime", "")
+                        > datetime.now().isoformat()
+                    ):
+                        return f"The next event is {event.get('summary')} on {event.get('start', {}).get('dateTime', '')}"
+            elif time_shift < 0:
+                for event in reversed(events):
+                    if (
+                        event.get("start", {}).get("dateTime", "")
+                        < datetime.now().isoformat()
+                    ):
+                        return f"The previous event was {event.get('summary')} on {event.get('start', {}).get('dateTime', '')}"
 
-        # Try to find the most relevant event based on context and query
-        query_lower = query.lower()
-        query_terms = set(query_lower.split())
-
-        # Look for events that match names or terms mentioned in recent context
-        event_scores = []
-        for event in events:
-            score = 0
-            event_text = f"{event.get('summary', '')} {event.get('description', '')} {event.get('location', '')}".lower()
-
-            # Score based on query terms
-            for term in query_terms:
-                if len(term) > 2 and term in event_text:  # Only meaningful terms
-                    score += 2
-
-            # Score based on recent conversation context
-            for context_word in search_context:
-                if len(context_word) > 2 and context_word in event_text:
-                    score += 1
-
-            if score > 0:
-                event_scores.append((event, score))
-
-        # Sort by relevance and take the most relevant
-        event_scores.sort(key=lambda x: x[1], reverse=True)
-
-        if event_scores:
-            target_event = event_scores[0][0]
-            logger.debug(
-                f"Found target event: {target_event.get('summary')} (score: {event_scores[0][1]})"
-            )
-
-        # Answer based on the requested detail
-        requested_detail = intent_data.get("requested_detail", "none")
-        question_type = intent_data.get("question_type", "none")
-
-        if not target_event:
-            return "I'm not sure which specific event you're asking about. Could you provide more details?"
-
-        # Handle specific detail requests
-        if (
-            requested_detail == "zoom_link"
-            or "zoom" in query_lower
-            or "link" in query_lower
-        ):
-            # Look for zoom links in description, location, or conferenceData
-            zoom_info = extract_zoom_info(target_event)
-            if zoom_info:
-                event_name = target_event.get("summary", "your meeting")
-
-                # Check if it's a proper URL or just meeting info
-                if zoom_info.startswith("http"):
-                    if question_type == "yes_no":
-                        return (
-                            f"Yes! Here's the Zoom link for {event_name}: {zoom_info}"
-                        )
-                    else:
-                        return f"Here's the Zoom link for {event_name}: {zoom_info}"
-                else:
-                    # It's meeting ID or other zoom info
-                    if question_type == "yes_no":
-                        return (
-                            f"Yes! Here's the Zoom info for {event_name}: {zoom_info}"
-                        )
-                    else:
-                        return f"Here's the Zoom info for {event_name}: {zoom_info}"
-            else:
-                event_name = target_event.get("summary", "that meeting")
-                return f"No, I don't see a Zoom link for {event_name}."
-
-        elif (
-            requested_detail == "location"
-            or "where" in query_lower
-            or "location" in query_lower
-        ):
-            location = target_event.get("location", "")
-            event_name = target_event.get("summary", "your meeting")
-            if location:
-                if question_type == "yes_no":
-                    return f"Yes, {event_name} is at: {location}"
-                else:
-                    return f"{event_name} is at: {location}"
-            else:
-                return f"No location is specified for {event_name}."
-
-        elif (
-            requested_detail == "time" or "time" in query_lower or "when" in query_lower
-        ):
-            start_time = target_event.get("start", {})
-            event_name = target_event.get("summary", "your meeting")
-
-            if start_time:
-                # Format the time nicely
-                if "dateTime" in start_time:
-                    dt = datetime.fromisoformat(
-                        start_time["dateTime"].replace("Z", "+00:00")
-                    )
-                    formatted_time = dt.strftime("%A, %B %d, %Y at %I:%M %p")
-                    return f"{event_name} is on {formatted_time}."
-                elif "date" in start_time:
-                    dt = datetime.strptime(start_time["date"], "%Y-%m-%d")
-                    formatted_date = dt.strftime("%A, %B %d, %Y")
-                    return f"{event_name} is on {formatted_date} (all day)."
-
-            return f"I couldn't determine the time for {event_name}."
-
-        # Handle general questions about the event
-        else:
-            event_name = target_event.get("summary", "your meeting")
-            description = target_event.get("description", "")
-            location = target_event.get("location", "")
-
-            # Try to answer with available information
-            info_parts = []
-            if description:
-                info_parts.append(f"Description: {description}")
-            if location:
-                info_parts.append(f"Location: {location}")
-
-            zoom_info = extract_zoom_info(target_event)
-            if zoom_info:
-                info_parts.append(f"Zoom link: {zoom_info}")
-
-            if info_parts:
-                return f"Here's what I know about {event_name}:\n\n" + "\n".join(
-                    info_parts
-                )
-            else:
-                return (
-                    f"I found {event_name} but don't have additional details available."
-                )
+        return "I'm not sure which specific time period you're asking about. Could you please be more specific?"
 
     except Exception as e:
         logger.error(f"Error in follow-up question handler: {e}")

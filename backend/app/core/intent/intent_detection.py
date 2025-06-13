@@ -39,16 +39,52 @@ def determine_query_intent(
     """
     logger.debug(f"Determining intent for query: {query}")
 
-    # Step 1: Use LLM to understand the true intent
+    # Step 1: Check for follow-up indicators
+    follow_up_indicators = [
+        "how about",
+        "what about",
+        "and",
+        "then",
+        "after",
+        "before",
+        "next",
+        "previous",
+        "last",
+        "first",
+        "earlier",
+        "later",
+    ]
+
+    is_likely_followup = False
+    if conversation_context and conversation_context.get("chat_history"):
+        last_assistant_msg = next(
+            (
+                msg["content"]
+                for msg in reversed(conversation_context["chat_history"])
+                if msg["role"] == "assistant"
+            ),
+            "",
+        )
+        if last_assistant_msg:
+            # Check if query contains follow-up indicators
+            query_lower = query.lower()
+            is_likely_followup = any(
+                indicator in query_lower for indicator in follow_up_indicators
+            )
+
+            # Check if query is very short (likely a follow-up)
+            is_likely_followup = is_likely_followup or len(query.split()) <= 3
+
+    # Step 2: Use LLM to understand the true intent
     llm_intent = classify_query_intent_with_llm(query, conversation_context)
 
-    # Step 2: Use rule-based processing to extract time/search info
+    # Step 3: Use rule-based processing to extract time/search info
     rule_based_result = rule_based_intent_detection(query)
 
-    # Step 3: Combine LLM understanding with rule-based extraction
+    # Step 4: Combine LLM understanding with rule-based extraction
     result = rule_based_result.copy()  # Start with rule-based data
 
-    # Override intent type based on LLM classification
+    # Override intent type based on LLM classification and follow-up detection
     intent_mapping = {
         "follow_up_question": "follow_up_question",
         "schedule_query": "search_events",
@@ -60,6 +96,22 @@ def determine_query_intent(
     }
 
     llm_intent_type = llm_intent.get("intent", "schedule_query")
+
+    # If it's likely a follow-up, force follow_up_question intent
+    if is_likely_followup:
+        llm_intent_type = "follow_up_question"
+        result["is_follow_up"] = True
+
+        # Preserve time context from previous interaction
+        if conversation_context:
+            result["time_context"] = {
+                "last_time_direction": conversation_context.get("last_time_direction"),
+                "last_search_type": conversation_context.get("last_search_type"),
+                "last_events_found": conversation_context.get("last_events_found"),
+                "last_query": conversation_context.get("last_query"),
+                "last_response": conversation_context.get("last_response"),
+            }
+
     mapped_intent = intent_mapping.get(llm_intent_type, "search_events")
 
     # Update result with LLM insights
@@ -67,7 +119,7 @@ def determine_query_intent(
         {
             "intent_type": mapped_intent,
             "llm_classification": llm_intent,
-            "is_follow_up": llm_intent.get("is_follow_up", False),
+            "is_follow_up": llm_intent.get("is_follow_up", False) or is_likely_followup,
             "question_type": llm_intent.get("question_type", "none"),
             "requested_detail": llm_intent.get("requested_detail", "none"),
             "confidence": llm_intent.get("confidence", 0.5),
@@ -79,6 +131,26 @@ def determine_query_intent(
         result["needs_calendar_data"] = True
         # For follow-ups, use a broader search range to find relevant events
         result["days_range"] = 30  # Look in a month range for context
+
+    # Special handling for event creation
+    if mapped_intent == "create_event":
+        # Combine event details from both LLM and rule-based detection
+        event_details = {}
+
+        # Get event details from LLM classification
+        llm_event_details = llm_intent.get("event_details", {})
+        if llm_event_details:
+            event_details.update(llm_event_details)
+
+        # Get event details from rule-based detection
+        rule_based_event_details = rule_based_result.get("event_details", {})
+        if rule_based_event_details:
+            event_details.update(rule_based_event_details)
+
+        # If we have event details, add them to the result
+        if event_details:
+            result["event_details"] = event_details
+            result["needs_calendar_data"] = False
 
     logger.debug(f"Final intent result: {result}")
     return result
@@ -612,17 +684,104 @@ def extract_search_terms(
 
 def rule_based_intent_detection(query: str) -> Dict[str, Any]:
     """
-    Use rule-based approach to determine query intent.
-
-    Args:
-        query: User's query string
-
-    Returns:
-        Dict with intent type and parameters
+    Use rule-based processing to extract time/search info and detect basic intents.
     """
-    # Extract time information using pattern matching
-    from ..time.time_manager import parse_time_range
+    query_lower = query.lower()
 
+    # First check for greetings and general chat
+    greeting_patterns = [
+        r"^(?:hi|hello|hey|greetings|howdy|good morning|good afternoon|good evening)(?:\s|$)",
+        r"^how are you",
+        r"^how's it going",
+        r"^how do you do",
+        r"^what's up",
+        r"^how have you been",
+        r"^how's your day",
+        r"^how's everything",
+        r"^how's life",
+        r"^how are things",
+    ]
+
+    for pattern in greeting_patterns:
+        if re.search(pattern, query_lower, re.IGNORECASE):
+            return {
+                "intent_type": "greeting",
+                "is_past": False,
+                "days_range": 0,
+                "reverse_chronological": False,
+                "specific_date": None,
+                "search_terms": [],
+                "specified_calendar": None,
+                "needs_calendar_data": False,
+                "time_info": {},
+                "is_find_last_occurrence": False,
+                "is_find_next_occurrence": False,
+            }
+
+    # Check for event creation patterns
+    creation_patterns = [
+        r"(?:schedule|create|add|set up|book|make)\s+(?:a|an|)\s+(?:meeting|event|appointment|call|session)",
+        r"(?:put|place)\s+(?:a|an|)\s+(?:meeting|event|appointment|call|session)\s+(?:on|in|at|for)",
+        r"(?:add|create|schedule)\s+(?:meeting|event|appointment|call|session)\s+(?:for|on|at|in)",
+        r"(?:set|make)\s+(?:a|an|)\s+(?:meeting|event|appointment|call|session)\s+(?:for|on|at|in)",
+    ]
+
+    for pattern in creation_patterns:
+        if re.search(pattern, query_lower, re.IGNORECASE):
+            # Extract event details
+            event_details = {
+                "summary": None,
+                "start_time": None,
+                "end_time": None,
+                "description": None,
+                "location": None,
+            }
+
+            # Try to extract title/summary
+            title_match = re.search(
+                r"(?:called|titled|named)\s+['\"](.+?)['\"]", query_lower
+            )
+            if title_match:
+                event_details["summary"] = title_match.group(1)
+            else:
+                # Look for title after creation verb
+                title_match = re.search(
+                    r"(?:schedule|create|add|set up|book|make)\s+(?:a|an|)\s+(?:meeting|event|appointment|call|session)\s+(?:called|titled|named|)\s+['\"](.+?)['\"]",
+                    query_lower,
+                )
+                if title_match:
+                    event_details["summary"] = title_match.group(1)
+
+            # Try to extract time
+            time_match = re.search(
+                r"(?:at|on|for)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|))", query_lower
+            )
+            if time_match:
+                event_details["start_time"] = time_match.group(1)
+
+            # Try to extract date
+            date_match = re.search(
+                r"(?:on|for)\s+(\w+\s+\d{1,2}(?:st|nd|rd|th)?)", query_lower
+            )
+            if date_match:
+                event_details["start_time"] = date_match.group(1)
+
+            return {
+                "intent_type": "create_event",
+                "is_past": False,
+                "days_range": 0,
+                "reverse_chronological": False,
+                "specific_date": None,
+                "search_terms": [],
+                "specified_calendar": None,
+                "needs_calendar_data": False,
+                "time_info": {},
+                "is_find_last_occurrence": False,
+                "is_find_next_occurrence": False,
+                "event_details": event_details,
+            }
+
+    # Parse time range from query
     time_info = parse_time_range(query)
 
     # Extract search terms
@@ -661,18 +820,36 @@ def rule_based_intent_detection(query: str) -> Dict[str, Any]:
         "is_find_next_occurrence": is_find_next_occurrence,
     }
 
-    # Check for greeting intents
-    greeting_patterns = [
-        r"^(?:hi|hello|hey|greetings|howdy|good morning|good afternoon|good evening)(?:\s|$)",
-        r"^how are you",
+    # Check for calendar access query
+    calendar_access_patterns = [
+        r"which\s+calendars?\s+(?:do\s+you|can\s+you|are\s+you|you)\s+(?:have|use|access|search|query|find|see)",
+        r"what\s+calendars?\s+(?:do\s+you|can\s+you|are\s+you|you)\s+(?:have|use|access|search|query|find|see)",
+        r"show\s+(?:me|)\s+(?:my|the|)\s+calendars?",
+        r"list\s+(?:my|the|)\s+calendars?",
     ]
-    for pattern in greeting_patterns:
-        if re.search(pattern, query.lower(), re.IGNORECASE):
-            result["intent_type"] = "greeting"
+
+    for pattern in calendar_access_patterns:
+        if re.search(pattern, query_lower, re.IGNORECASE):
+            result["intent_type"] = "calendar_access_query"
             result["needs_calendar_data"] = False
             break
 
-    # Return the result
+    # Check for specified calendar
+    if not result["intent_type"] == "calendar_access_query":
+        calendar_patterns = [
+            r"in\s+(?:my|the)\s+(.+?)\s+calendar",
+            r"from\s+(?:my|the)\s+(.+?)\s+calendar",
+            r"on\s+(?:my|the)\s+(.+?)\s+calendar",
+            r"check\s+(?:my|the)\s+(.+?)\s+calendar",
+        ]
+
+        for pattern in calendar_patterns:
+            match = re.search(pattern, query_lower, re.IGNORECASE)
+            if match:
+                calendar_name = match.group(1).strip()
+                result["specified_calendar"] = calendar_name
+                break
+
     return result
 
 
@@ -708,64 +885,141 @@ def classify_query_intent_with_llm(
                     context_parts.append(f"{role.title()}: {content}")
             recent_context = "\n".join(context_parts)
 
-        prompt = f"""Analyze this user query and classify its intent. Consider the recent conversation context.
+        prompt = f"""You are ORII, an advanced calendar assistant with deep semantic understanding. Your task is to analyze the user's query and determine their true intent, considering both explicit and implicit meanings.
 
 Recent Conversation:
 {recent_context if recent_context else "No recent context"}
 
 Current Query: "{query}"
 
-Classify the intent into ONE of these categories:
+First, analyze the query for these key aspects:
+1. Temporal Context:
+   - Is this about past, present, or future events?
+   - Are there relative time references (e.g., "next", "last", "after")?
+   - Is this a follow-up to a previous time reference?
 
-1. **follow_up_question** - User is asking a specific question about something mentioned in recent conversation
-   - Examples: "is there a zoom link?", "what time is that?", "where is it located?"
-   - Look for: yes/no questions, detail requests about recent events/meetings
+2. Action Intent:
+   - Is the user trying to find information?
+   - Are they trying to create or modify something?
+   - Are they asking about system capabilities?
+   - Is this a general conversation?
 
-2. **schedule_query** - User wants to see their calendar/schedule 
-   - Examples: "what do I have tomorrow?", "show me my schedule", "what's coming up?"
+3. Entity References:
+   - Are there specific events, people, or locations mentioned?
+   - Are there implicit references to previous context?
+   - Are there calendar-specific entities (e.g., "work calendar", "personal calendar")?
 
-3. **event_search** - User is searching for specific events
-   - Examples: "when is my dentist appointment?", "find my meeting with John"
+4. Query Type:
+   - Is this a direct question?
+   - Is this a command or request?
+   - Is this a follow-up or clarification?
+   - Is this a general conversation starter?
 
-4. **availability_check** - User wants to know if they're free
-   - Examples: "am I free on Friday?", "do I have anything at 3pm?"
+Based on this analysis, classify the intent into ONE of these categories:
 
-5. **event_creation** - User wants to create/schedule something
-   - Examples: "schedule a meeting", "add an event", "book lunch tomorrow"
+1. FOLLOW_UP_QUESTION - User is asking about something mentioned in recent context
+   - Examples: "how about tomorrow?", "what about that meeting?", "and after that?"
+   - Look for: references to previous context, short queries, time shifts
 
-6. **non_calendar** - Not related to calendar
-   - Examples: "hello", "how are you?", "what's the weather?"
+2. TIME_DATE_QUERY - Questions about specific dates or times
+   - Examples: "what day is it?", "when is next week?", "what's the date tomorrow?"
+   - Look for: date/time questions, calendar navigation
 
-7. **time_date_query** - Asking about current time/date
-   - Examples: "what time is it?", "what day is today?"
+3. EVENT_SEARCH - Looking for specific events
+   - Examples: "find my therapy session", "when is my meeting with John?"
+   - Look for: specific event references, people, locations
 
-Respond with ONLY a JSON object:
+4. SCHEDULE_QUERY - General schedule questions
+   - Examples: "what do I have tomorrow?", "show me my week"
+   - Look for: time periods, general schedule requests
+
+5. AVAILABILITY_CHECK - Checking free time
+   - Examples: "am I free on Friday?", "when can I schedule a meeting?"
+   - Look for: availability questions, free time requests
+
+6. EVENT_CREATION - Creating new events
+   - Examples: "schedule a meeting", "add an appointment", "create a call"
+   - Look for: creation verbs (schedule, create, add, set up, book, make)
+   - Look for: event types (meeting, event, appointment, call, session)
+   - Look for: time/date specifications (at 2pm, on Monday, for tomorrow)
+   - Look for: event details (title, location, description)
+
+7. EVENT_MODIFICATION - Changing existing events
+   - Examples: "move my meeting", "change the time"
+   - Look for: modification verbs, existing event references
+
+8. EVENT_DELETION - Removing events
+   - Examples: "cancel my meeting", "delete that appointment"
+   - Look for: deletion verbs, removal requests
+
+9. CALENDAR_MANAGEMENT - Calendar-specific operations
+   - Examples: "show my calendars", "which calendars can you access?"
+   - Look for: calendar operations, system capabilities
+
+10. GENERAL_CHAT - Non-calendar conversation
+    - Examples: "hello", "how are you?", "thanks"
+    - Look for: general conversation, greetings
+
+Return a JSON object with:
 {{
-    "intent": "follow_up_question|schedule_query|event_search|availability_check|event_creation|non_calendar|time_date_query",
+    "intent": "INTENT_NAME",
     "confidence": 0.0-1.0,
     "is_follow_up": true/false,
-    "question_type": "yes_no|specific_detail|open_ended|none",
-    "requested_detail": "zoom_link|location|time|date|description|none",
-    "reasoning": "brief explanation"
-}}"""
+    "time_direction": "past/present/future",
+    "entities": {{
+        "events": ["event1", "event2"],
+        "people": ["person1", "person2"],
+        "locations": ["location1", "location2"],
+        "calendars": ["calendar1", "calendar2"]
+    }},
+    "time_references": {{
+        "type": "specific/relative/range",
+        "value": "actual value if specific",
+        "direction": "past/present/future"
+    }},
+    "event_details": {{
+        "summary": "event title if mentioned",
+        "start_time": "start time if mentioned",
+        "end_time": "end time if mentioned",
+        "description": "description if mentioned",
+        "location": "location if mentioned"
+    }},
+    "reasoning": "Brief explanation of the classification"
+}}
 
-        result = llm_client.get_completion(prompt)
+Important:
+- Consider both explicit and implicit meanings
+- Pay special attention to follow-up questions
+- Look for context from previous messages
+- Consider the user's likely goal, not just the literal query
+- If uncertain, provide lower confidence scores
+- For EVENT_CREATION, extract as many event details as possible
+"""
 
-        # Parse the JSON response
-        import json
+        result = llm_client.get_completion(prompt, model="gpt-4")
+        intent_data = json.loads(result)
 
-        try:
-            intent_data = json.loads(result)
-            logger.debug(f"LLM intent classification: {intent_data}")
-            return intent_data
-        except json.JSONDecodeError:
-            logger.error(f"Failed to parse LLM response: {result}")
-            return {
-                "intent": "schedule_query",
-                "confidence": 0.5,
-                "is_follow_up": False,
-            }
+        # Ensure required fields exist
+        intent_data.setdefault("intent", "GENERAL_CHAT")
+        intent_data.setdefault("confidence", 0.5)
+        intent_data.setdefault("is_follow_up", False)
+        intent_data.setdefault("time_direction", "present")
+        intent_data.setdefault("entities", {})
+        intent_data.setdefault("time_references", {})
+        intent_data.setdefault("event_details", {})
+        intent_data.setdefault("reasoning", "")
+
+        return intent_data
 
     except Exception as e:
         logger.error(f"Error in LLM intent classification: {e}")
-        return {"intent": "schedule_query", "confidence": 0.5, "is_follow_up": False}
+        return {
+            "intent": "GENERAL_CHAT",
+            "confidence": 0.5,
+            "is_follow_up": False,
+            "time_direction": "present",
+            "entities": {},
+            "time_references": {},
+            "event_details": {},
+            "reasoning": f"Error: {str(e)}",
+        }

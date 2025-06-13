@@ -254,7 +254,7 @@ def format_chatbot_response(response):
     return str(response)
 
 
-def get_intent_response(query, conversation_context=None):
+async def get_intent_response(query, conversation_context=None):
     """Process the query and get a response using hybrid LLM + rule-based approach"""
     try:
         logger.info(f"Processing query: {query}")
@@ -272,96 +272,19 @@ def get_intent_response(query, conversation_context=None):
         intent_data = determine_query_intent(query, conversation_context)
         logger.debug(f"Intent determined: {intent_data}")
 
-        intent_type = intent_data.get("intent_type", "").lower()
-        llm_classification = intent_data.get("llm_classification", {})
-
-        # Handle follow-up questions with specific processing
-        if intent_type == "follow_up_question":
-            logger.debug("Processing follow-up question with specialized handler")
-            try:
-                # Import the follow-up handler
-                from backend.app.core.intent.intent_processor import (
-                    follow_up_question_handler,
-                )
-
-                # Use the specialized follow-up handler
-                import asyncio
-
-                follow_up_response = asyncio.run(
-                    follow_up_question_handler(
-                        query=query,
-                        intent_data=intent_data,
-                        conversation_context=conversation_context,
-                    )
-                )
-
-                return {
-                    "status": "success",
-                    "message": follow_up_response,
-                    "intent_type": "follow_up_question",
-                    "llm_classification": llm_classification,
-                }
-
-            except Exception as e:
-                logger.error(f"Error in follow-up handler: {e}")
-                # Fall back to regular processing
-                intent_type = "search_events"
-
-        # Handle greeting intents without accessing calendar
-        if intent_type == "greeting":
-            logger.info(f"Handling greeting intent")
-            return {
-                "status": "success",
-                "message": "Hello! I'm your calendar assistant. How can I help you with your schedule today?",
-                "intent_type": "greeting",
-            }
-
-        # Handle time/date queries
-        if intent_type == "time_date":
-            logger.info("Handling time/date query")
-            from datetime import datetime
-
-            now = datetime.now()
-            return {
-                "status": "success",
-                "message": f"Today is {now.strftime('%A, %B %d, %Y')} and the current time is {now.strftime('%I:%M %p')}.",
-                "intent_type": "time_date",
-            }
-
-        # For all other intents, use the regular calendar processing
-        # Default values if not provided by intent detection
-        intent_data.setdefault("intent_type", "search_events")
-        intent_data.setdefault("is_past", False)
-        intent_data.setdefault("days_range", 7)
-        intent_data.setdefault("reverse_chronological", False)
-        intent_data.setdefault("specific_date", None)
-        intent_data.setdefault("search_terms", [])
-        intent_data.setdefault("time_info", {})
-        intent_data.setdefault("specified_calendar", None)
-
-        logger.debug(f"Processing intent with parameters: {intent_data}")
-
         # Process the intent using the regular calendar processor
         logger.debug("Calling process_intent")
-        response = process_intent(
-            intent_type=intent_data.get("intent_type"),
-            is_past=intent_data.get("is_past"),
-            days_range=intent_data.get("days_range"),
-            reverse_chronological=intent_data.get("reverse_chronological"),
-            specific_date=intent_data.get("specific_date"),
-            search_terms=intent_data.get("search_terms"),
+        response = await process_intent(
+            intent_data=intent_data,
             query=query,
-            time_info=intent_data.get("time_info", {}),
-            specified_calendar=intent_data.get("specified_calendar"),
-            is_find_last_occurrence=intent_data.get("is_find_last_occurrence", False),
-            is_find_next_occurrence=intent_data.get("is_find_next_occurrence", False),
+            conversation_context=conversation_context,
         )
         logger.debug("Intent processing complete")
 
         # Add the original intent data and LLM classification to the response
         response["intent_type"] = intent_data.get("intent_type")
         response["time_info"] = intent_data.get("time_info", {})
-        response["llm_classification"] = llm_classification
+        response["llm_classification"] = intent_data.get("llm_classification", {})
 
         # Log events count if available
         if "events" in response:
@@ -375,11 +298,15 @@ def get_intent_response(query, conversation_context=None):
         return {
             "status": "error",
             "message": f"I encountered an error: {str(e)}",
+            "needs_calendar_data": False,
+            "intent_type": "error",
+            "time_info": {},
+            "llm_classification": {},
         }
 
 
 # Simplified processing using only the fixed legacy path
-def process_query(query, conversation_context=None):
+async def process_query(query, conversation_context=None):
     """Process a query using the fixed and reliable legacy processing path"""
     logger.debug(f"process_query called with query: {query}")
 
@@ -394,7 +321,7 @@ def process_query(query, conversation_context=None):
 
     try:
         # Use the fixed legacy processing method (no more dual paths!)
-        response = get_intent_response(query, conversation_context)
+        response = await get_intent_response(query, conversation_context)
         formatted_response = format_chatbot_response(response)
 
         # Store in history
