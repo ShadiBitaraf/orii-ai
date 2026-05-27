@@ -1,4 +1,10 @@
 """
+GOOD FOR ORII VERSION 2
+
+Complete iCalendar implementation with create/parse/convert functions. 
+Not needed while using Google Calendar JSON API(V1 cli version). 
+Keeping for future multi-calendar-provider support.
+
 iCalendar protocol utilities for standardized calendar operations.
 
 This module provides functions for working with the iCalendar (RFC 5545) format,

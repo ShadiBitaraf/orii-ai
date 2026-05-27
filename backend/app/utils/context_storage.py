@@ -1,4 +1,9 @@
 """
+GOOD FOR ORII VERSION 2
+
+Well-built with Redis/file/database backends, TTL, cleanup. Way more than needed for v1. 
+For v1 just need a dict in memory. This is the v2 context persistence.
+
 Enhanced Context Storage with Multiple Backend Options
 """
 
