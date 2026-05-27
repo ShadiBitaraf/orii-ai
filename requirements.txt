@@ -12,7 +12,7 @@ pytz>=2025.2  # Timezone handling
 google-auth>=2.40.0
 google-api-python-client>=2.171.0
 dateparser>=1.2.0
-icalendar>=6.3.0
+# icalendar>=6.3.0
 
 # CLI and utilities
 loguru>=0.7.2  # Logging

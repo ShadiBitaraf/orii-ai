@@ -61,7 +61,7 @@ class LLMClient:
             logger.error(f"Error initializing OpenAI client: {e}")
             raise Exception(f"Failed to initialize OpenAI client: {str(e)}")
 
-    def get_completion(self, prompt: str, model: str = "gpt-3.5-turbo") -> str:
+    def get_completion(self, prompt: str, model: str = "gpt-5-mini") -> str:
         """Get a completion from the LLM.
 
         Args:
