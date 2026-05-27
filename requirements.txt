@@ -1,15 +1,11 @@
-# Flask web framework
-flask==2.3.2
-flask-cors==4.0.0
 
 # Core dependencies
 python-dotenv>=1.0.0  # Environment variables
 python-dateutil>=2.9.0  # Date parsing
-PyJWT>=2.10.0  # Authentication
+
 
 # AI and APIs  
 openai>=1.85.0  # OpenAI API client (Python 3.13 compatible)
-spacy>=3.8.0  # Natural language processing for calendar queries
 pytz>=2025.2  # Timezone handling
 
 # Google Calendar integration
@@ -17,9 +13,6 @@ google-auth>=2.40.0
 google-api-python-client>=2.171.0
 dateparser>=1.2.0
 icalendar>=6.3.0
-
-# Storage and caching
-redis>=6.2.0
 
 # CLI and utilities
 loguru>=0.7.2  # Logging
@@ -31,8 +24,8 @@ termcolor>=2.3.0  # Colored terminal output
 # psycopg2-binary>=2.9.0  # Only for PostgreSQL
 
 # Development/Testing (optional)
-# pytest>=8.2.0
-# black>=23.11.0
+pytest>=8.2.0
+black>=23.11.0
 
 # Note: After installing spacy, you need to download the language model:
 # python3 -m spacy download en_core_web_sm

@@ -14,7 +14,7 @@ import json
 from termcolor import colored
 import time
 from prompt_toolkit import PromptSession
-from prompt_toolkit.styles import Style
+# from prompt_toolkit.styles import Style
 from prompt_toolkit.formatted_text import HTML
 import traceback
 
@@ -133,11 +133,11 @@ get_smart_date_parser = getattr(
 )
 
 # Create a styled prompt session
-style = Style.from_dict(
-    {
-        "prompt": "bold #0000FF",  # Bold blue
-    }
-)
+# style = Style.from_dict(
+#     {
+#         "prompt": "bold #0000FF",  # Bold blue
+#     }
+# )
 
 # Store conversation history
 conversation_history = []
@@ -362,7 +362,7 @@ def run_chat():
     print_welcome()
 
     # Create prompt session
-    session = PromptSession(style=style)
+    session = PromptSession()
 
     # Track conversation context for follow-up questions
     conversation_context = {
