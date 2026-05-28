@@ -58,7 +58,7 @@ log_file = os.path.join(logs_dir, "orii_demo.log")
 
 # Import the Loguru logger
 try:
-    from backend.app.utils.logger import get_logger
+    from utils.logger import get_logger
 
     # Create a logger specific to this module with no console output
     logger = get_logger(name="orii_demo", module="orii_demo")
@@ -83,7 +83,7 @@ except ImportError as e:
 
 # Import LLM client
 try:
-    from backend.app.utils.llm_client import get_llm_client
+    from core.llm import get_llm_client
 except ImportError as e:
     logger.error(
         "Could not import LLM client. Conversational responses may be limited."
@@ -306,6 +306,7 @@ async def get_intent_response(query, conversation_context=None):
 
 
 # Simplified processing using only the fixed legacy path
+# TODO: import from core.query after defined correctly in query.py
 async def process_query(query, conversation_context=None):
     """Process a query using the fixed and reliable legacy processing path"""
     logger.debug(f"process_query called with query: {query}")
