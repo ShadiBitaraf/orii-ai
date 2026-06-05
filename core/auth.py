@@ -1,4 +1,7 @@
 # Google OAuth (from credential_utils.py)
+#1
+#"do we have Google credentials?"
+
 
 """
 Credential utilities for Google Calendar API.

@@ -1,1 +1,3 @@
-# orchestration — calls auth, cache, llm, calendar, and retrieval in their correct orders
+# orchestration — calls auth, cache, calendar, retrieval, and llm in order. 
+# the manager. Calls all other stations in order.
+

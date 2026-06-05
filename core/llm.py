@@ -1,4 +1,6 @@
 # OpenAI calls (from llm_client.py)
+# 5
+# "turn the matching events into a natural language answer"
 """
 LLM client for the application.
 

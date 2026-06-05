@@ -65,7 +65,7 @@ class EnhancedCalendarProcessor:
             self.llm_client = llm_client
         else:
             try:
-                from ..utils.llm_client import get_llm_client
+                from core.llm import get_llm_client
 
                 self.llm_client = get_llm_client()
             except ImportError:

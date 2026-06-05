@@ -1,31 +1,18 @@
-
 # Core dependencies
-python-dotenv>=1.0.0  # Environment variables
-python-dateutil>=2.9.0  # Date parsing
-
-
+python-dotenv>=1.0.0 
+python-dateutil>=2.9.0 
 # AI and APIs  
-openai>=1.85.0  # OpenAI API client (Python 3.13 compatible)
+openai>=1.85.0 
 pytz>=2025.2  # Timezone handling
-
 # Google Calendar integration
 google-auth>=2.40.0
+google-auth-oauthlib>=0.4.6
 google-api-python-client>=2.171.0
 dateparser>=1.2.0
 # icalendar>=6.3.0
-
 # CLI and utilities
 loguru>=0.7.2  # Logging
-prompt_toolkit>=3.0.0  # CLI prompts
+prompt_toolkit>=3.0.0  
 termcolor>=2.3.0  # Colored terminal output
-
-# Optional: Database (only if using SQLite/PostgreSQL)
-# sqlalchemy>=2.0.0
-# psycopg2-binary>=2.9.0  # Only for PostgreSQL
-
-# Development/Testing (optional)
 pytest>=8.2.0
 black>=23.11.0
-
-# Note: After installing spacy, you need to download the language model:
-# python3 -m spacy download en_core_web_sm
