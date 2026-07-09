@@ -1,63 +1,62 @@
 #  in-memory TTL cache
 # 2
-
 import datetime
 class Cached:
-    cached_data = {}
     def __init__(self, ttl_mins=60):
-        self.ttl = datetime.timedelta(minutes=ttl_mins)
+        self.ttl_mins = datetime.timedelta(minutes=ttl_mins)
+        self.cached_data = {}
 
-    # cached_data = {
-    #     "today": {
-    #         "events": [...],
-    #         "retrieved_at": datetime.datetime(2026, 5, 28, 10, 0, 0)
-    #     }
-    # }
+    def is_stale(self, retrievedTime):
+        expiry_point = retrievedTime + self.ttl_mins
+        return datetime.datetime.now() > expiry_point
 
-    def is_stale(self):
-        timestamp_str = cached_data["retrieved_at"]
-        retrieved_time = datetime.datetime.fromisoformat(timestamp_str)
-        ttl = retrieved_time + datetime.timedelta(hours=1)
-
-        if ttl < datetime.datetime.now():
-            print("Cache is stale")
-            return True
-        print("Cache is fresh")
-        return False
-
-
-    #getter and setter query.py will use to check for cached data and set cached data if it doesn't exit
-    def get(self, key) -> Optional[dict]:
-        if key not in self.cached_data:
+    ####### Getter and Setter #######
+    def get(self, key_event):
+        if key_event in self.cached_data:
+            if self.is_stale(self.cached_data[key_event]["retrieved_at"]):
+                print("key stale")
+                return None
+            else:
+                return self.cached_data[key_event]["events"]
+        else:
             print("key dne. timestamp not cached")
             return None
-        elif self.is_stale(cached_data[key]):
-            print("key stale. timestamp cached")
-            return None
-        return cached_data[key]
 
-    def set(key, value) -> None:
-        cached_data[key] = value
-
-# my question for now and future is if im defining functions and classes that i need to 
-#define inputs and return values for, how do i know the other classes that feed these functions
-#inputs have as return types. like in the setter func, how do i know what is the type of the value input
-#that the calendar or query file provides? what do i know the type of key
-
-#key is a str (a date string like "2026-05-28"), value is a list[dict] (a list of Google Calendar event objects).
+    def set(self, key_timerange, value_events) -> None:
+        self.cached_data[key_timerange] = {
+            "events": value_events,
+            "retrieved_at": datetime.datetime.now(),
+        }
 
 
-    # def main():
-    #     inner_dict = cached_data[0] 
-    #     if is_stale(inner_dict) == False:
-    #         return cached_data[0]["data"] #TODO: or whatever the key is for the events data in the inner dict. idk what the key is. maybe "events" or "data" or something else. i need to check how the inner dict is defined and what keys it has.
-    #     if is_stale() == True:
-    #         return None
+# if __name__ == "__main__":
+    ####### Notes #######
+    # - the outer dict can have multiple keys: one per date range that's been queried this session.
+    # - e.g. :
+    # cached_data = {
+    #     "2026-07-04": { "events": [...], "retrieved_at": datetime(2026, 7, 4, 9, 0) },
+    #     "2026-07-04_2026-07-11": { "events": [...], "retrieved_at": datetime(2026, 7, 4, 9, 5) },
+    # }
+    # - input of the function is strings, whether its a range or single date
+    # - the retrieved_at is the now timestamp on when the setter is called.
 
+    ####### Final Structure form #######
 
-    # if __name__ == "__main__":
-    #     main()
+    ### TYPE: dict[str, dict]
+    # cached_data = {
 
+    #     ### outer key: str (the date range)
+    #     "2026-07-04": {
 
+    #         ### inner key "events": str
+    #         ### inner value: list[dict]  ← real Google event objects
+    #         "events": [
+    #             {"summary": "Dentist", "start": {"dateTime": "..."}},
+    #             {"summary": "Lunch",   "start": {"dateTime": "..."}}
+    #         ],
 
-
+    #         ### inner key "retrieved_at": str
+    #         ### inner value: datetime object  ← you created this, not Google
+    #         "retrieved_at": datetime.datetime(2026, 7, 4, 9, 0, 0)
+    #     }
+    # }
